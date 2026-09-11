@@ -2,40 +2,46 @@
 
 ## Before applying
 
-1. Disconnect the Fire TV from uncontrolled networks if an update is pending.
-2. Run `audit` and confirm `SUPPORTED_MUTATION_TARGET=YES`.
-3. Run `backup` separately and copy the resulting directory somewhere safe.
-4. Do not reboot if the UI says an update will install on the next reboot.
+1. If an update is pending for the next reboot, disconnect the Stick from
+   uncontrolled networks.
+2. Run `audit`; continue only when both support markers say `YES`.
+3. Keep stable power and ADB connectivity during `apply`.
+4. Record the printed `BACKUP_DIR` immediately.
+
+## Exploit and reboot boundary
+
+The safe probe validates the exact kernel surface without entering the race.
+Live mode is different: it can watchdog-reboot the Stick. The script launches
+live mode once, waits for a uid-0 proof, and refuses app/package changes without
+that proof. It never retries the race automatically.
+
+If ADB returns after an unexpected reboot, run `audit` again. Do not rerun
+`apply` until the build still matches and you have inspected the prior attempt's
+backup and device log at `/data/local/tmp/kara-ghostlock.start.log`.
 
 ## OTA boundary
 
-The public controller performs two reversible user-space actions:
+After root succeeds, the exploit quarantines any staged `/data/ota_package`,
+`/cache/recovery/command`, and `/cache/recovery/block.map`, disables the three
+known OTA packages, and sets `ota_disable_automatic_update=1`. The controller
+requires all three paths to be absent before installing apps or debloating.
 
-- removes the known OTA packages for Android user 0 through the reviewed
-  removal manifest;
-- sets `global ota_disable_automatic_update` to `1`.
-
-These measures do not erase a payload already staged in `/data` or `/cache`, do
-not change bootloader/recovery policy, and are not an absolute promise that an
-Amazon update can never occur. Clearing a staged recovery update can require
-temporary root and exact inspection of the live device. That privileged action
-is intentionally outside this public script.
-
-The optional `--root-helper` interface is limited to the protected
-`com.amazon.vizzini` user-0 removal. It does not remove staged OTA files.
+These are build-specific software controls, not an absolute guarantee against
+all future updater behavior. The toolkit never modifies the bootloader or
+recovery partition.
 
 ## Automatic rollback
 
-After a backup exists, any failed `apply` triggers a best-effort automatic
-restore. The command still exits non-zero. Read both markers:
+After a backup exists, a failed `apply` attempts restoration and still exits
+non-zero:
 
 ```text
 AUTOMATIC_ROLLBACK=PASS
 AUTOMATIC_ROLLBACK=FAIL backup=/path/to/backup
 ```
 
-If rollback fails, do not reboot. Preserve the printed backup directory and run
-the explicit restore command after ADB connectivity is stable.
+A watchdog reboot or lost ADB connection can prevent automatic rollback. In
+that case, preserve the backup and restore explicitly after ADB is stable.
 
 ## Manual rollback
 
@@ -46,24 +52,20 @@ the explicit restore command after ADB connectivity is stable.
   --yes restore
 ```
 
-The restore command:
+Add the same `--bridge` option used during installation when applicable. The
+restore command verifies the same device/build, reinstalls only manifest
+packages recorded as present, restores their disabled state, restores HOME,
+and restores or deletes the OTA and CEC settings according to the backup.
 
-- confirms the same exact device/build;
-- reinstalls only manifest packages that were active in that backup;
-- restores their prior disabled state;
-- restores the recorded HOME component;
-- restores or deletes the OTA setting according to the backup.
-
-It intentionally leaves Projectivy and Kara Settings installed. They can be
-removed later with ordinary package-manager commands after a working HOME and
-Settings path have been confirmed.
+Projectivy, Aurora Store, and Kara Settings remain installed after this package
+state rollback. Remove them only after a working HOME and Settings path have
+been confirmed.
 
 ## Recovery priorities
 
-If the device becomes unstable:
-
-1. Keep it powered and keep ADB connected.
-2. Restore the latest known-good backup.
-3. Confirm HOME resolves and launch it explicitly.
-4. Confirm Wi-Fi, Bluetooth remote, HDMI-CEC, audio, and streaming playback.
-5. Reboot only after the restored state is verified.
+1. Keep stable power and reconnect ADB.
+2. Confirm the exact build with `audit`.
+3. Restore the latest known-good backup.
+4. Confirm HOME and launch it explicitly.
+5. Test Wi-Fi, the Bluetooth remote, HDMI-CEC, audio, and streaming playback.
+6. Reboot only after the restored state is verified and no update is staged.

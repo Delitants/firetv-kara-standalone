@@ -16,5 +16,9 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y shellcheck
       - name: Run integration tests
         run: sh tests/run-tests.sh
+      - name: Verify manifests
+        run: python3 tests/verify-manifests.py
+      - name: Scan excluded content
+        run: sh tests/scan-excluded-content.sh
       - name: Run ShellCheck
-        run: shellcheck scripts/kara-tool.sh tests/run-tests.sh
+        run: shellcheck scripts/kara-tool.sh tests/run-tests.sh tests/scan-excluded-content.sh

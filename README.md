@@ -1,137 +1,101 @@
 # Fire TV 4K Max 1st Gen (`kara`) standalone toolkit
 
-A fail-closed, reversible toolkit for turning the **Amazon Fire TV Stick 4K
-Max 1st Generation** into a Projectivy-based, low-Amazon-UI streaming device
-while retaining Fire OS and its vendor media stack.
+This toolkit converts one exact Fire TV build to a Projectivy-based setup. The
+`apply` command downloads and authenticates the complete kara exploit, obtains
+temporary root, contains a staged OTA, installs Projectivy Launcher and Aurora
+Store, installs the included Kara Settings repair, switches HOME, and removes
+the reviewed non-core Amazon packages for Android user 0.
 
-## Exact supported target
+It does not unlock the bootloader, flash a ROM, write a partition, or install
+persistent root. No hardware short is required for the supported build.
+
+## Exact supported device
+
+Every value below must match. Mutating commands stop on any mismatch.
 
 | Property | Required value |
 | --- | --- |
 | Product codename | `kara` |
 | Amazon model | `AFTKA` |
-| Device generation | Fire TV Stick 4K Max 1st Gen (2021) |
-| Fire OS base | Fire OS 7 / Android 9 / API 28 |
-| Tested build | `0035334210436` (`PS7713/5443`) |
+| Marketing model | Fire TV Stick 4K Max 1st Generation (2021) |
+| Fire OS base | Android 9 / API 28 |
+| Firmware build | `0035334210436` (`PS7713/5443`) |
+| Kernel | `4.14.87+`, ARM32 `armv7l`, four online CPUs |
 | SoC | MediaTek MT8696 |
 
-The mutating commands refuse every other identity or build. In particular,
-this is **not** for `mantis/AFTMM`, `mantra/AFTKM`, or `karat/AFTKRT`.
+This is not compatible with `mantis/AFTMM`, `mantra/AFTKM`, or
+`karat/AFTKRT`, even though their names or hardware may look similar.
 
-## What it does
+## Read this before `apply`
 
-`scripts/kara-tool.sh` provides six commands:
+**The exploit can reboot the Stick.** It uses a live kernel race. A failed
+attempt can trigger the watchdog, disconnect ADB, and leave temporary root
+unavailable. If the screen says an update will install on the next reboot,
+disconnect the Stick from uncontrolled networks and read
+[`docs/RECOVERY.md`](docs/RECOVERY.md) first.
 
-- `audit` — read-only identity and launcher inventory;
-- `download-projectivy` — downloads the latest official Projectivy APK;
-- `backup` — records current HOME, OTA, package, and firmware state;
-- `apply` — backs up, installs the apps, switches HOME, debloats user 0,
-  applies the OTA preference, and verifies the result;
-- `verify` — read-only post-change checks;
-- `restore` — reinstalls packages and restores HOME/OTA from a backup.
+`apply` creates a local backup before invoking live mode and refuses package
+changes until uid 0 is proven. If ADB remains available, later failures trigger
+a best-effort automatic rollback. A watchdog reboot can prevent that automatic
+rollback, so keep the printed backup directory.
 
-The `apply` sequence is deliberately ordered:
+**Root is temporary.** It disappears on reboot. Projectivy as HOME, installed
+apps, and user-0 package removals are Android package-manager state and normally
+survive a reboot. The system APKs remain on the read-only system partition and
+can be restored.
 
-1. Require exact `kara/AFTKA/API28/build 0035334210436` identity.
-2. Create a timestamped backup.
-3. Download Projectivy from `spocky/miproja1` and Aurora Store from
-   `AuroraOSS/AuroraStore` over HTTPS.
-4. Verify their official source URLs, package names, Android compatibility, and
-   developer signing-certificate SHA-256 values; also require GitHub's published
-   digest for Projectivy.
-5. Install Projectivy, Aurora Store, and the included open-source Kara Settings
-   app.
-6. Require all three packages to be active.
-7. Set Projectivy as HOME and require package-manager readback.
-8. Remove the reviewed 115 ordinary Amazon packages for user 0.
-9. Optionally remove the single protected package through a caller-supplied
-   temporary-root helper.
-10. Set `ota_disable_automatic_update=1`.
-11. Verify HOME, OTA, identity, and package absence.
-
-If a post-mutation check fails, the script automatically attempts restoration
-from the backup it just created and still exits non-zero.
-
-## Important boundaries
-
-- This is not a custom ROM, bootloader unlock, or persistent-root package.
-- It does not flash or overwrite any partition.
-- Package removal is `pm uninstall -k --user 0`: system APKs remain on the
-  read-only system partition and can be restored with `install-existing`.
-- It does not bundle an exploit, Amazon firmware, partition images, premium
-  apps, Projectivy binaries, credentials, or device-specific identifiers.
-- It preserves the 49-package core set and 16-package compatibility set under
-  [`manifests/`](manifests/).
-- `com.amazon.vizzini` is isolated in `remove-privileged.txt`; it is attempted
-  only when `--root-helper` is explicitly supplied.
-- No software-only OTA block is an absolute guarantee. See
-  [OTA and recovery](docs/RECOVERY.md) before rebooting a device that already
-  reports an update staged for the next boot.
-
-## Prerequisites
+## Requirements
 
 On the controller computer:
 
 - POSIX shell, Python 3, `curl`, and `shasum` or `sha256sum`;
 - Android platform tools (`adb`);
-- Android SDK build tools providing `aapt` and `apksigner`;
-- ADB debugging enabled on the Fire TV;
-- direct ADB access, or SSH key access to a Linux machine attached over USB.
+- Android SDK build tools (`aapt` and `apksigner`);
+- ADB debugging enabled and authorized on the Fire TV;
+- for USB bridge mode, key-based SSH plus `scp` and `adb` on the Linux host.
 
-On macOS, `adb` can be installed with Homebrew:
+On macOS, install ADB with:
 
 ```sh
 brew install android-platform-tools
 ```
 
-Install Android SDK Build Tools with Android Studio or `sdkmanager`, then point
-the script at their executables if they are not on `PATH`:
+If Android build tools are not on `PATH`, set their exact locations:
 
 ```sh
 export AAPT="$ANDROID_SDK_ROOT/build-tools/35.0.0/aapt"
 export APKSIGNER="$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner"
 ```
 
-## Quick start — direct network ADB
+## Wi-Fi ADB quick start
 
-Replace the example serial with the value shown by `adb devices`:
-
-```sh
-adb connect DEVICE_IP:5555
-./scripts/kara-tool.sh --serial DEVICE_IP:5555 audit
-./scripts/kara-tool.sh --serial DEVICE_IP:5555 download-projectivy
-./scripts/kara-tool.sh --serial DEVICE_IP:5555 download-aurora
-./scripts/kara-tool.sh --serial DEVICE_IP:5555 --yes apply
-./scripts/kara-tool.sh --serial DEVICE_IP:5555 verify
-```
-
-If an already-audited temporary-root helper exists on the device and implements
-`HELPER --cmd COMMAND`, opt into the protected-package step explicitly:
+Replace `FIRE_TV_IP` with the Stick's address. Accept the debugging prompt on
+the TV before continuing.
 
 ```sh
-./scripts/kara-tool.sh \
-  --serial DEVICE_IP:5555 \
-  --root-helper /data/local/tmp/YOUR_REVIEWED_HELPER \
-  --yes apply
+adb connect FIRE_TV_IP:5555
+./scripts/kara-tool.sh --serial FIRE_TV_IP:5555 audit
+./scripts/kara-tool.sh --serial FIRE_TV_IP:5555 --yes apply
+./scripts/kara-tool.sh --serial FIRE_TV_IP:5555 verify
 ```
 
-The script accepts helper paths only under `/data/local/tmp`, sends only its
-fixed `com.amazon.vizzini` user-0 removal command, and does not acquire root or
-launch an exploit itself.
+The `audit` output must say both `SUPPORTED_MUTATION_TARGET=YES` and
+`SUPPORTED_EXPLOIT_TARGET=YES`. During `apply`,
+the important success markers are:
 
-Pin the known-tested Projectivy release instead of following `latest`:
-
-```sh
-./scripts/kara-tool.sh --projectivy 4.71 download-projectivy
-./scripts/kara-tool.sh --aurora 4.8.4 download-aurora
-./scripts/kara-tool.sh --serial DEVICE_IP:5555 \
-  --projectivy 4.71 --aurora 4.8.4 --yes apply
+```text
+TEMP_ROOT=PASS
+STAGED_OTA_PATHS=ABSENT
+PRIVILEGED_REMOVAL=PASS
+VERIFY_GATE=PASS
+APPLY_GATE=PASS
 ```
 
-## Quick start — USB ADB through a Linux bridge
+## USB through a Linux host
 
-The bridge must have `adb`, the USB device must already be authorized, and SSH
-must work without an interactive password prompt:
+Connect the Stick by USB to a Linux host where `adb devices` lists it as
+authorized. From the controller computer, replace `LINUX_HOST` and
+`USB_SERIAL`:
 
 ```sh
 ./scripts/kara-tool.sh \
@@ -143,87 +107,112 @@ must work without an interactive password prompt:
   --bridge root@LINUX_HOST \
   --serial USB_SERIAL \
   --yes apply
+
+./scripts/kara-tool.sh \
+  --bridge root@LINUX_HOST \
+  --serial USB_SERIAL \
+  verify
 ```
 
-Only the ADB commands run on the bridge. Projectivy is downloaded and verified
-on the controller, then `adb install` streams it to the device.
+Downloads are authenticated on the controller, copied to a randomized `/tmp`
+path on the Linux host, passed to its ADB, and removed from the host afterward.
 
-## Restore
+## What `apply` does
 
-Every backup command prints its directory. Keep that exact path:
+The order is fail-closed:
 
-```sh
-./scripts/kara-tool.sh --serial DEVICE_IP:5555 backup
-```
+1. Verify the exact device, model, build, API, kernel, ABI, CPU count, shell
+   uid, and enforcing SELinux state.
+2. Record HOME, package inventories, firmware identity, OTA preference, CEC
+   guard, and boot ID in a timestamped local backup.
+3. Download the exact exploit release and require its tag, filename, GitHub
+   URL, release digest, and independently pinned live-tested SHA-256.
+4. Stage it at a per-run device path, enable the CEC reboot guard, and run its
+   non-mutating `--probe`.
+5. Reuse an exactly matched live daemon or invoke live mode once; require uid 0,
+   the root proof, exact daemon executable path, and unchanged firmware.
+6. Require the staged OTA directory and both recovery command paths to be
+   absent.
+7. Download and authenticate Projectivy and Aurora Store, then install them and
+   the included Kara Settings app.
+8. Make Projectivy HOME and require package-manager readback before removing
+   the 115 ordinary and one protected reviewed Amazon packages for user 0.
+9. Set the OTA preference and verify the complete result.
 
-Restore with:
+`--root-helper /data/local/tmp/NAME` remains available for advanced recovery.
+It bypasses exploit launch only after providing the same uid-0, build, and exact
+daemon-executable proof.
+
+## Restore the backup
+
+`apply` prints `BACKUP_DIR=/path/to/directory`. To restore that state, keep the
+same connection options and pass the absolute directory:
 
 ```sh
 ./scripts/kara-tool.sh \
-  --serial DEVICE_IP:5555 \
-  --backup backups/20260911T120000Z-12345 \
+  --serial FIRE_TV_IP:5555 \
+  --backup /absolute/path/to/backups/TIMESTAMP-PID \
   --yes restore
 ```
 
-The restore operation uses the recorded package inventory; it does not activate
-Amazon packages that were absent before the corresponding backup.
+For a USB bridge, add `--bridge root@LINUX_HOST --serial USB_SERIAL`. Restore
+reinstalls only packages that were present in that backup and restores their
+disabled state, HOME, OTA preference, and CEC guard. It does not flash firmware.
 
-## Projectivy supply-chain verification
+## Complete exploit source
 
-The repository does not redistribute Projectivy. During installation the script
-queries the official
+The complete kara adaptation is public in the provenance-preserving
+[`Delitants/GhostLock` kara branch](https://github.com/Delitants/GhostLock/tree/kara-PS7713-5443/kara).
+Its host tests, build script, target constants, source provenance, and release
+notes are included there. The controller pins release
+[`kara-PS7713-5443-v1`](https://github.com/Delitants/GhostLock/releases/tag/kara-PS7713-5443-v1)
+and SHA-256:
+
+```text
+a42185d743ee1d4c9c46c1e35f5fa0a40f5e9a7f81450308c3eab297677847d5
+```
+
+## Application supply-chain checks
+
+Projectivy is downloaded from the developer's
 [`spocky/miproja1`](https://github.com/spocky/miproja1/releases/latest)
-release, requires the asset URL to remain under that repository, verifies the
-SHA-256 digest published by GitHub, and checks:
+releases. The script verifies the official URL, GitHub digest, package name,
+version, API compatibility, and signing certificate.
 
-- package: `com.spocky.projengmenu`;
-- minimum SDK: no higher than API 28;
-- signer certificate SHA-256:
-  `f6697bf4082ee97511e4de07863193884a015b7ab5860430321bda1042b0aadd`.
+Aurora Store is downloaded from AuroraOSS's official catalog. The script
+requires the standard APK under `/downloads/AuroraStore/Release/` and verifies
+its URL, package name, version, API compatibility, and signing certificate.
 
-The known-tested official 4.71 asset has SHA-256:
-`6818fc2db44411a605ca4d7067fb9d7227aaef2414cff42de58fe13e9321b47a`.
-
-## Aurora Store supply-chain verification
-
-The installer queries AuroraOSS's official `https://auroraoss.com/api/files`
-catalog, selects only a standard APK immediately under
-`/downloads/AuroraStore/Release/`, and requires the download URL to remain on
-`auroraoss.com`. It then verifies:
-
-- package: `com.aurora.store`;
-- minimum SDK: no higher than API 28;
-- version name: identical to the official release tag;
-- signer certificate SHA-256:
-  `4c626157ad02bda3401a7263555f68a79663fc3e13a4d4369a12570941aa280f`.
-
-The known-tested official 4.8.4 APK has SHA-256:
-`8a1ed9aa09631290da91cb793e0517b0f20dc70239ac94ae6682cd94f91a4bad`.
-
-No other application store or updater is included or installed.
+Neither third-party APK is stored in this repository. No other app store or
+updater is installed by this toolkit.
 
 ## Kara Settings
 
-Fire OS Settings can crash or route through removed Amazon launcher components
-after aggressive debloating. The included `local.kara.settingsredirector`
-application supplies a standalone TV-oriented Settings entry for network,
-Bluetooth, and device information. Its source and reviewed signed APK are under
-[`app/kara-settings/`](app/kara-settings/).
+Aggressive debloating breaks the stock top-level Settings route. The included
+open-source `local.kara.settingsredirector` provides TV-oriented Network,
+Bluetooth, and Device/About screens. Source, build notes, and the reviewed APK
+hash are under [`app/kara-settings/`](app/kara-settings/).
 
-## Testing
+## Commands and tests
 
-The offline test suite uses controlled fake ADB and download endpoints; it never
-contacts or mutates a real device:
+```text
+audit                  Read-only identity and launcher inventory
+download-projectivy    Authenticate and cache Projectivy
+download-aurora        Authenticate and cache Aurora Store
+download-exploit       Authenticate and cache the exact kara exploit
+backup                 Save restorable user-0 state
+apply                  Run the complete backed-up workflow
+verify                 Verify the durable configuration
+restore                Restore a named backup
+```
+
+The offline suite uses fake ADB, SSH, and download endpoints and never touches
+a real device:
 
 ```sh
 sh tests/run-tests.sh
+python3 tests/verify-manifests.py
 ```
 
-See [MODEL-SAFETY.md](docs/MODEL-SAFETY.md) and
-[RECOVERY.md](docs/RECOVERY.md) before modifying a device.
-
-## License and third-party software
-
-Original scripts and Kara Settings source are MIT licensed. Projectivy is a
-third-party application and is downloaded from its developer; it is not covered
-by this repository's license. See [NOTICE.md](NOTICE.md).
+See [`docs/MODEL-SAFETY.md`](docs/MODEL-SAFETY.md),
+[`docs/RECOVERY.md`](docs/RECOVERY.md), and [`NOTICE.md`](NOTICE.md).

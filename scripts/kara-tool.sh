@@ -119,6 +119,8 @@ done
 if [ -n "$bridge" ]; then
     printf '%s\n' "$bridge" | grep -Eq '^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+$' || fail 'unsafe SSH bridge name'
 fi
+case "$KARA_ROOT_WAIT_ATTEMPTS" in ''|*[!0-9]*) fail 'invalid root wait attempt count' ;; esac
+[ "$KARA_ROOT_WAIT_ATTEMPTS" -gt 0 ] || fail 'root wait attempt count must be positive'
 
 remote_adb() {
     remote_line=
@@ -205,13 +207,17 @@ mutation_identity_gate() {
     [ "$actual_api" = "$SUPPORTED_API" ] || fail "unsupported Android API: $actual_api"
 }
 
-exploit_runtime_gate() {
+exploit_runtime_values() {
     actual_kernel=$(device uname -r)
     actual_machine=$(device uname -m)
     actual_abi=$(device getprop ro.product.cpu.abi)
     actual_cpus=$(device getconf _NPROCESSORS_ONLN)
     actual_uid=$(device id -u)
     actual_selinux=$(device getenforce)
+}
+
+exploit_runtime_gate() {
+    exploit_runtime_values
     [ "$actual_kernel" = "$SUPPORTED_KERNEL" ] || fail "unsupported kernel release: $actual_kernel"
     [ "$actual_machine" = "$SUPPORTED_MACHINE" ] || fail "unsupported machine: $actual_machine"
     [ "$actual_abi" = "$SUPPORTED_ABI" ] || fail "unsupported primary ABI: $actual_abi"
@@ -460,15 +466,25 @@ install_aurora() {
 
 verify_root_helper() {
     printf '%s\n' "$root_helper" | grep -Eq '^/data/local/tmp/[A-Za-z0-9._-]+$' || fail 'unsafe root-helper path'
-    root_proof=$(device "$root_helper" --cmd 'id; cat /data/local/tmp/kara-root-ready' 2>/dev/null) || return 1
+    root_command='id; cat /data/local/tmp/kara-root-ready; for p in /proc/[0-9]*; do e=$(readlink "$p/exe" 2>/dev/null); if [ "$e" = '"$root_helper"' ]; then echo "DAEMON_EXE=$e"; exit 0; fi; done; exit 1'
+    root_proof=$(device "$root_helper" --cmd "$root_command" 2>/dev/null) || return 1
     printf '%s\n' "$root_proof" | grep -F 'uid=0(root)' >/dev/null || return 1
     printf '%s\n' "$root_proof" | grep -F 'ROOTED uid=0 euid=0' >/dev/null || return 1
     printf '%s\n' "$root_proof" | grep -F "build=$SUPPORTED_BUILD" >/dev/null || return 1
+    printf '%s\n' "$root_proof" | grep -Fx "DAEMON_EXE=$root_helper" >/dev/null || return 1
+}
+
+verify_staged_ota_absent() {
+    ota_check='for p in /data/ota_package /cache/recovery/command /cache/recovery/block.map; do [ ! -e "$p" ] || echo "PRESENT:$p"; done'
+    ota_present=$(device "$root_helper" --cmd "$ota_check") || fail 'could not verify staged OTA paths'
+    [ -z "$ota_present" ] || fail "staged OTA path remains: $ota_present"
+    printf 'STAGED_OTA_PATHS=ABSENT\n'
 }
 
 obtain_temp_root() {
     if [ -n "$root_helper" ]; then
         verify_root_helper || fail 'supplied root helper did not prove temporary uid 0'
+        mutation_identity_gate
         printf 'TEMP_ROOT=PASS supplied-helper\n'
         return
     fi
@@ -477,7 +493,7 @@ obtain_temp_root() {
     printf '%s\n' "$exploit_output"
     exploit_path=$(printf '%s\n' "$exploit_output" | sed -n 's/^KARA_EXPLOIT_PATH=//p')
     [ -f "$exploit_path" ] || fail 'verified kara exploit is missing'
-    remote_exploit="/data/local/tmp/$KARA_EXPLOIT_ASSET"
+    remote_exploit="/data/local/tmp/kara-ghostlock-$$"
     adb_push_file "$exploit_path" "$remote_exploit" >/dev/null || fail 'could not stage kara exploit'
     device chmod 700 "$remote_exploit" >/dev/null || fail 'could not make kara exploit executable'
     probe_output=$(device "$remote_exploit" --probe) || fail 'kara exploit safe probe failed'
@@ -486,6 +502,7 @@ obtain_temp_root() {
 
     root_helper=$remote_exploit
     if verify_root_helper; then
+        mutation_identity_gate
         printf 'TEMP_ROOT=PASS reused-live-daemon\n'
         return
     fi
@@ -495,6 +512,7 @@ obtain_temp_root() {
     root_attempt=0
     while [ "$root_attempt" -lt "$KARA_ROOT_WAIT_ATTEMPTS" ]; do
         if verify_root_helper; then
+            mutation_identity_gate
             printf 'TEMP_ROOT=PASS new-live-daemon\n'
             return
         fi
@@ -533,6 +551,7 @@ apply_changes() {
     adb_call shell settings put secure block_cec_standby 1 >/dev/null
     [ "$(device settings get secure block_cec_standby)" = 1 ] || fail 'could not enable the exploit CEC reboot guard'
     obtain_temp_root
+    verify_staged_ota_absent
     install_projectivy
     install_aurora
     install_kara_settings
@@ -555,7 +574,10 @@ apply_changes() {
 
 audit_device() {
     identity_values
+    exploit_runtime_values
     printf 'DEVICE=%s\nMODEL=%s\nBUILD=%s\nAPI=%s\n' "$actual_device" "$actual_model" "$actual_build" "$actual_api"
+    printf 'KERNEL=%s\nMACHINE=%s\nABI=%s\nCPUS=%s\nSHELL_UID=%s\nSELINUX=%s\n' \
+        "$actual_kernel" "$actual_machine" "$actual_abi" "$actual_cpus" "$actual_uid" "$actual_selinux"
     printf 'VERIFIED_BOOT=%s\n' "$(device getprop ro.boot.verifiedbootstate)"
     printf 'FLASH_LOCKED=%s\n' "$(device getprop ro.boot.flash.locked)"
     printf 'HOME=%s\n' "$(device cmd package resolve-activity --brief --components --user 0 -a android.intent.action.MAIN -c android.intent.category.HOME)"
@@ -563,6 +585,12 @@ audit_device() {
         printf 'SUPPORTED_MUTATION_TARGET=YES\n'
     else
         printf 'SUPPORTED_MUTATION_TARGET=NO\n'
+    fi
+    if [ "$actual_device/$actual_model/$actual_build/API$actual_api" = "$SUPPORTED_DEVICE/$SUPPORTED_MODEL/$SUPPORTED_BUILD/API$SUPPORTED_API" ] &&
+        [ "$actual_kernel/$actual_machine/$actual_abi/$actual_cpus/$actual_uid/$actual_selinux" = "$SUPPORTED_KERNEL/$SUPPORTED_MACHINE/$SUPPORTED_ABI/$SUPPORTED_CPUS/2000/Enforcing" ]; then
+        printf 'SUPPORTED_EXPLOIT_TARGET=YES\n'
+    else
+        printf 'SUPPORTED_EXPLOIT_TARGET=NO\n'
     fi
 }
 

@@ -1,44 +1,42 @@
-# Model and firmware safety
+# Model, firmware, and exploit safety
 
-## Supported identity
+## Exact mutation gate
 
-Mutation is limited to all four simultaneous values:
+The controller requires `kara/AFTKA`, build `0035334210436`, API 28, kernel
+`4.14.87+`, `armv7l` with primary ABI `armeabi-v7a`, four online CPUs, ADB
+shell uid 2000, and enforcing SELinux. It rechecks firmware after root is
+obtained and stops before app or package changes if anything differs.
 
-```text
-ro.product.device=kara
-ro.product.model=AFTKA
-ro.build.version.incremental=0035334210436
-ro.build.version.sdk=28
-```
-
-`audit` can inspect another device, but `backup`, `apply`, `verify`, and
-`restore` stop on any mismatch.
+`audit` may inspect another device. `backup`, `apply`, `verify`, and `restore`
+refuse another device or build; the exploit runtime gate adds the remaining
+requirements before live mode.
 
 ## Similar names are not compatible
 
-| Marketing name | Codename | Model | SoC/base | Supported |
-| --- | --- | --- | --- | --- |
-| Fire TV Stick 4K (2018) | `mantis` | `AFTMM` | MT8695 / Fire OS 6 | No |
-| Fire TV Stick 4K Max 1st Gen | `kara` | `AFTKA` | MT8696 / Fire OS 7 | Yes, exact build only |
-| Fire TV Stick 4K 2nd Gen | `mantra` | `AFTKM` | MT8696D / Fire OS 8 | No |
-| Fire TV Stick 4K Max 2nd Gen | `karat` | `AFTKRT` | MT8696T / Fire OS 8 | No |
+| Marketing name | Codename | Model | Supported |
+| --- | --- | --- | --- |
+| Fire TV Stick 4K (2018) | `mantis` | `AFTMM` | No |
+| Fire TV Stick 4K Max 1st Gen | `kara` | `AFTKA` | Exact build only |
+| Fire TV Stick 4K 2nd Gen | `mantra` | `AFTKM` | No |
+| Fire TV Stick 4K Max 2nd Gen | `karat` | `AFTKRT` | No |
 
-Never flash a preloader, LK, boot image, recovery, or exploit payload from one
-of these related devices onto another.
+Do not reuse this payload, offsets, firmware, or instructions on a related
+model. Marketing similarity is not compatibility evidence.
 
-## Root and bootloader scope
+## Root, reboot, and bootloader boundary
 
-The ordinary workflow uses authorized ADB and user-0 package operations. This
-repository deliberately does not automate a kernel exploit, BootROM exploit,
-hardware short, bootloader unlock, partition write, downgrade, or ROM flash.
+The published exploit is a build-specific kernel race. Live mode may fail
+safely, succeed, or trigger a watchdog reboot. The controller invokes it at
+most once per `apply`; it does not automatically retry after a reboot.
 
-The exact exploitability of `kara` varies by firmware and security patch. A
-payload that works on a related MediaTek Fire TV is not compatibility evidence.
+Root exists only in the current boot through a device-local command daemon. No
+bootloader state, verified-boot state, partition, recovery, or ROM is changed.
+The toolkit does not require a hardware short and does not make the bootloader
+unlocked.
 
 ## Streaming stack
 
-The preserve manifests were selected to keep Fire OS framework, DRM/vendor
-integration, WebView, remote/Bluetooth, Wi-Fi, device control, settings, input,
-and media compatibility components. Nevertheless, application certification
-and streaming behavior can change independently. Verify the services important
-to you before deleting a backup.
+The preserve manifests retain Fire OS framework, DRM/vendor integration,
+WebView, remote/Bluetooth, Wi-Fi, device control, input, and media compatibility
+components. Application certification and streaming behavior can still change;
+test the services important to you before deleting backups.

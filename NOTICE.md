@@ -27,3 +27,11 @@ this repository.
 Amazon, Fire TV, Alexa, Prime Video, and related names are trademarks of Amazon.
 No Amazon firmware, APK, key, partition image, or proprietary source is
 distributed here. Package names in the manifests are interoperability facts.
+
+## GhostLock kara adaptation
+
+The exploit is maintained separately in the provenance-preserving
+`Delitants/GhostLock` fork and is downloaded by release URL; its binary is not
+stored in this repository. The fork retains upstream Git ancestry. No license
+file was present at the recorded upstream fork point, so this repository's MIT
+license must not be inferred to cover upstream or exploit-fork code.
