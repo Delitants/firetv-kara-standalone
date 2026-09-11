@@ -12,10 +12,15 @@ SUPPORTED_DEVICE=kara
 SUPPORTED_MODEL=AFTKA
 SUPPORTED_BUILD=0035334210436
 SUPPORTED_API=28
+SUPPORTED_KERNEL=4.14.87+
+SUPPORTED_MACHINE=armv7l
+SUPPORTED_ABI=armeabi-v7a
+SUPPORTED_CPUS=4
 KARA_EXPLOIT_REPO=Delitants/GhostLock
 KARA_EXPLOIT_TAG=kara-PS7713-5443-v1
 KARA_EXPLOIT_ASSET=kara-ghostlock-PS7713-5443.arm
 KARA_EXPLOIT_EXPECTED_SHA256=${KARA_EXPLOIT_EXPECTED_SHA256:-a42185d743ee1d4c9c46c1e35f5fa0a40f5e9a7f81450308c3eab297677847d5}
+KARA_ROOT_WAIT_ATTEMPTS=${KARA_ROOT_WAIT_ATTEMPTS:-20}
 
 base=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 manifest=${KARA_REMOVE_MANIFEST:-"$base/manifests/remove-user0.txt"}
@@ -36,12 +41,17 @@ assume_yes=0
 temp_dir=
 current_backup=
 rollback_needed=0
+bridge_temp=
 
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || fail "$1 is required"; }
 cleanup() {
     status=$?
     trap - 0 HUP INT TERM
+    if [ -n "$bridge_temp" ] && [ -n "$bridge" ]; then
+        ssh -o BatchMode=yes -o ConnectTimeout=8 "$bridge" rm -f "$bridge_temp" >/dev/null 2>&1 || true
+        bridge_temp=
+    fi
     if [ "$status" -ne 0 ] && [ "$rollback_needed" -eq 1 ] && [ -n "$current_backup" ]; then
         saved_backup_dir=$backup_dir
         backup_dir=$current_backup
@@ -106,6 +116,9 @@ while [ "$#" -gt 0 ]; do
 done
 [ "${command_name-}" ] || { usage >&2; exit 2; }
 [ "$#" -eq 0 ] || fail 'unexpected positional arguments'
+if [ -n "$bridge" ]; then
+    printf '%s\n' "$bridge" | grep -Eq '^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+$' || fail 'unsafe SSH bridge name'
+fi
 
 remote_adb() {
     remote_line=
@@ -120,6 +133,49 @@ remote_adb() {
 adb_call() {
     if [ -n "$serial" ]; then set -- -s "$serial" "$@"; fi
     if [ -n "$bridge" ]; then remote_adb adb "$@"; else "$ADB" "$@"; fi
+}
+
+stage_bridge_file() {
+    local_file=$1
+    [ -f "$local_file" ] || fail "local file is missing: $local_file"
+    need scp
+    bridge_name=$(basename -- "$local_file")
+    printf '%s\n' "$bridge_name" | grep -Eq '^[A-Za-z0-9._-]+$' || fail 'unsafe bridge staging filename'
+    bridge_temp="/tmp/kara-tool-$$-$bridge_name"
+    scp -q -o BatchMode=yes -o ConnectTimeout=8 -- "$local_file" "$bridge:$bridge_temp" ||
+        fail 'could not stage file on SSH bridge'
+}
+
+clear_bridge_file() {
+    [ -n "$bridge_temp" ] || return 0
+    ssh -o BatchMode=yes -o ConnectTimeout=8 "$bridge" rm -f "$bridge_temp" >/dev/null ||
+        fail 'could not clean SSH bridge staging file'
+    bridge_temp=
+}
+
+adb_install_file() {
+    local_file=$1
+    if [ -n "$bridge" ]; then
+        stage_bridge_file "$local_file"
+        install_status=0
+        remote_adb adb install -r "$bridge_temp" || install_status=$?
+        clear_bridge_file
+        return "$install_status"
+    fi
+    adb_call install -r "$local_file"
+}
+
+adb_push_file() {
+    local_file=$1
+    device_path=$2
+    if [ -n "$bridge" ]; then
+        stage_bridge_file "$local_file"
+        push_status=0
+        remote_adb adb push "$bridge_temp" "$device_path" || push_status=$?
+        clear_bridge_file
+        return "$push_status"
+    fi
+    adb_call push "$local_file" "$device_path"
 }
 
 device() {
@@ -147,6 +203,21 @@ mutation_identity_gate() {
     [ "$actual_model" = "$SUPPORTED_MODEL" ] || fail "unsupported model: $actual_model"
     [ "$actual_build" = "$SUPPORTED_BUILD" ] || fail "unsupported firmware build: $actual_build"
     [ "$actual_api" = "$SUPPORTED_API" ] || fail "unsupported Android API: $actual_api"
+}
+
+exploit_runtime_gate() {
+    actual_kernel=$(device uname -r)
+    actual_machine=$(device uname -m)
+    actual_abi=$(device getprop ro.product.cpu.abi)
+    actual_cpus=$(device getconf _NPROCESSORS_ONLN)
+    actual_uid=$(device id -u)
+    actual_selinux=$(device getenforce)
+    [ "$actual_kernel" = "$SUPPORTED_KERNEL" ] || fail "unsupported kernel release: $actual_kernel"
+    [ "$actual_machine" = "$SUPPORTED_MACHINE" ] || fail "unsupported machine: $actual_machine"
+    [ "$actual_abi" = "$SUPPORTED_ABI" ] || fail "unsupported primary ABI: $actual_abi"
+    [ "$actual_cpus" = "$SUPPORTED_CPUS" ] || fail "unsupported online CPU count: $actual_cpus"
+    [ "$actual_uid" = 2000 ] || fail "ADB shell must be uid 2000 before exploit: $actual_uid"
+    [ "$actual_selinux" = Enforcing ] || fail "SELinux must be Enforcing before exploit: $actual_selinux"
 }
 
 download_projectivy() {
@@ -342,6 +413,7 @@ create_backup() {
     mkdir "$current_backup"
     current_home=$(device cmd package resolve-activity --brief --components --user 0 -a android.intent.action.MAIN -c android.intent.category.HOME)
     ota_value=$(device settings get global ota_disable_automatic_update)
+    cec_value=$(device settings get secure block_cec_standby)
     boot_id=$(device cat /proc/sys/kernel/random/boot_id)
     fingerprint=$(device getprop ro.build.fingerprint)
     {
@@ -351,6 +423,7 @@ create_backup() {
         printf 'API=%s\n' "$actual_api"
         printf 'HOME=%s\n' "$current_home"
         printf 'OTA_DISABLE_AUTOMATIC_UPDATE=%s\n' "$ota_value"
+        printf 'BLOCK_CEC_STANDBY=%s\n' "$cec_value"
         printf 'BOOT_ID=%s\n' "$boot_id"
         printf 'FINGERPRINT=%s\n' "$fingerprint"
     } > "$current_backup/state.env"
@@ -364,7 +437,7 @@ install_projectivy() {
     printf '%s\n' "$download_output"
     projectivy_apk=$(printf '%s\n' "$download_output" | sed -n 's/^PROJECTIVY_APK=//p')
     [ -f "$projectivy_apk" ] || fail 'verified Projectivy APK is missing'
-    install_result=$(adb_call install -r "$projectivy_apk" | tr -d '\r') || fail 'Projectivy installation failed'
+    install_result=$(adb_install_file "$projectivy_apk" | tr -d '\r') || fail 'Projectivy installation failed'
     printf '%s\n' "$install_result" | tail -n 1 | grep -Fx Success >/dev/null || fail 'Projectivy installation did not report Success'
 }
 
@@ -372,7 +445,7 @@ install_kara_settings() {
     settings_apk="$base/app/kara-settings/kara-settings-v5-signed.apk"
     [ -f "$settings_apk" ] || fail 'Kara Settings APK is missing'
     [ "$(sha256_file "$settings_apk")" = "$KARA_SETTINGS_SHA256" ] || fail 'Kara Settings APK hash mismatch'
-    install_result=$(adb_call install -r "$settings_apk" | tr -d '\r') || fail 'Kara Settings installation failed'
+    install_result=$(adb_install_file "$settings_apk" | tr -d '\r') || fail 'Kara Settings installation failed'
     printf '%s\n' "$install_result" | tail -n 1 | grep -Fx Success >/dev/null || fail 'Kara Settings installation did not report Success'
 }
 
@@ -381,8 +454,54 @@ install_aurora() {
     printf '%s\n' "$download_output"
     aurora_apk=$(printf '%s\n' "$download_output" | sed -n 's/^AURORA_APK=//p')
     [ -f "$aurora_apk" ] || fail 'verified Aurora Store APK is missing'
-    install_result=$(adb_call install -r "$aurora_apk" | tr -d '\r') || fail 'Aurora Store installation failed'
+    install_result=$(adb_install_file "$aurora_apk" | tr -d '\r') || fail 'Aurora Store installation failed'
     printf '%s\n' "$install_result" | tail -n 1 | grep -Fx Success >/dev/null || fail 'Aurora Store installation did not report Success'
+}
+
+verify_root_helper() {
+    printf '%s\n' "$root_helper" | grep -Eq '^/data/local/tmp/[A-Za-z0-9._-]+$' || fail 'unsafe root-helper path'
+    root_proof=$(device "$root_helper" --cmd 'id; cat /data/local/tmp/kara-root-ready' 2>/dev/null) || return 1
+    printf '%s\n' "$root_proof" | grep -F 'uid=0(root)' >/dev/null || return 1
+    printf '%s\n' "$root_proof" | grep -F 'ROOTED uid=0 euid=0' >/dev/null || return 1
+    printf '%s\n' "$root_proof" | grep -F "build=$SUPPORTED_BUILD" >/dev/null || return 1
+}
+
+obtain_temp_root() {
+    if [ -n "$root_helper" ]; then
+        verify_root_helper || fail 'supplied root helper did not prove temporary uid 0'
+        printf 'TEMP_ROOT=PASS supplied-helper\n'
+        return
+    fi
+
+    exploit_output=$(download_exploit)
+    printf '%s\n' "$exploit_output"
+    exploit_path=$(printf '%s\n' "$exploit_output" | sed -n 's/^KARA_EXPLOIT_PATH=//p')
+    [ -f "$exploit_path" ] || fail 'verified kara exploit is missing'
+    remote_exploit="/data/local/tmp/$KARA_EXPLOIT_ASSET"
+    adb_push_file "$exploit_path" "$remote_exploit" >/dev/null || fail 'could not stage kara exploit'
+    device chmod 700 "$remote_exploit" >/dev/null || fail 'could not make kara exploit executable'
+    probe_output=$(device "$remote_exploit" --probe) || fail 'kara exploit safe probe failed'
+    printf '%s\n' "$probe_output" | grep -F 'KARA_V2_PROBE=PASS' >/dev/null ||
+        fail 'kara exploit safe probe did not pass'
+
+    root_helper=$remote_exploit
+    if verify_root_helper; then
+        printf 'TEMP_ROOT=PASS reused-live-daemon\n'
+        return
+    fi
+
+    adb_call shell "nohup $remote_exploit --live RUN-KARA-PS7713-GHOSTLOCK-V2 >/data/local/tmp/kara-ghostlock.start.log 2>&1 </dev/null &" >/dev/null ||
+        fail 'could not start kara exploit'
+    root_attempt=0
+    while [ "$root_attempt" -lt "$KARA_ROOT_WAIT_ATTEMPTS" ]; do
+        if verify_root_helper; then
+            printf 'TEMP_ROOT=PASS new-live-daemon\n'
+            return
+        fi
+        root_attempt=$((root_attempt + 1))
+        sleep 1
+    done
+    fail 'temporary root was not obtained; no package changes were attempted'
 }
 
 remove_privileged_packages() {
@@ -408,8 +527,12 @@ remove_privileged_packages() {
 apply_changes() {
     [ "$assume_yes" -eq 1 ] || fail 'apply requires --yes'
     mutation_identity_gate
+    exploit_runtime_gate
     create_backup
     rollback_needed=1
+    adb_call shell settings put secure block_cec_standby 1 >/dev/null
+    [ "$(device settings get secure block_cec_standby)" = 1 ] || fail 'could not enable the exploit CEC reboot guard'
+    obtain_temp_root
     install_projectivy
     install_aurora
     install_kara_settings
@@ -504,6 +627,10 @@ restore_backup() {
     old_ota=$(sed -n 's/^OTA_DISABLE_AUTOMATIC_UPDATE=//p' "$state")
     case "$old_ota" in null|'') adb_call shell settings delete global ota_disable_automatic_update >/dev/null ;;
         *) adb_call shell settings put global ota_disable_automatic_update "$old_ota" >/dev/null ;;
+    esac
+    old_cec=$(sed -n 's/^BLOCK_CEC_STANDBY=//p' "$state")
+    case "$old_cec" in null|'') adb_call shell settings delete secure block_cec_standby >/dev/null ;;
+        *) adb_call shell settings put secure block_cec_standby "$old_cec" >/dev/null ;;
     esac
     printf 'RESTORE_GATE=PASS\n'
 }

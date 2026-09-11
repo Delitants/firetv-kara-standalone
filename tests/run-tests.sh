@@ -19,6 +19,8 @@ new_fixture() {
     printf 'com.amazon.tv.launcher\ncom.amazon.device.software.ota\n' > "$fixture/remove-user0.txt"
     printf 'com.amazon.vizzini\n' > "$fixture/remove-privileged.txt"
     printf '0\n' > "$fixture/ota.state"
+    printf '0\n' > "$fixture/cec.state"
+    printf '0\n' > "$fixture/root.state"
     fixture_digest=$(shasum -a 256 "$fixture/projectivy.apk" | awk '{print $1}')
     fixture_exploit_digest=$(shasum -a 256 "$fixture/kara-exploit.arm" | awk '{print $1}')
     exploit_duplicate=
@@ -35,6 +37,7 @@ EOF
 {"name":"downloads","path":"/downloads","isDirectory":true,"contents":[{"name":"AuroraStore","path":"/downloads/AuroraStore","isDirectory":true,"contents":[{"name":"Release","path":"/downloads/AuroraStore/Release","isDirectory":true,"contents":[{"name":"AuroraStore-4.8.4.apk","path":"/downloads/AuroraStore/Release/AuroraStore-4.8.4.apk","isDirectory":false,"mimeType":"application/vnd.android.package-archive","size":9362660}]}]}]}
 EOF
     : > "$fixture/adb.log"
+    : > "$fixture/bridge.log"
 
     cat > "$fixture/bin/curl" <<'EOF'
 #!/bin/sh
@@ -111,6 +114,12 @@ case "$*" in
     'shell getprop ro.build.fingerprint') printf 'Amazon/kara/kara:9/PS7713/0035334210436:user/release-keys\n' ;;
     'shell getprop ro.boot.verifiedbootstate') printf 'green\n' ;;
     'shell getprop ro.boot.flash.locked') printf '1\n' ;;
+    'shell getprop ro.product.cpu.abi') printf '%s\n' "${FAKE_ABI:-armeabi-v7a}" ;;
+    'shell uname -m') printf '%s\n' "${FAKE_MACHINE:-armv7l}" ;;
+    'shell uname -r') printf '%s\n' "${FAKE_KERNEL:-4.14.87+}" ;;
+    'shell getconf _NPROCESSORS_ONLN') printf '%s\n' "${FAKE_CPUS:-4}" ;;
+    'shell id -u') printf '2000\n' ;;
+    'shell getenforce') printf 'Enforcing\n' ;;
     'shell cat /proc/sys/kernel/random/boot_id') printf '11111111-2222-3333-4444-555555555555\n' ;;
     'shell cmd package resolve-activity --brief --components --user 0 -a android.intent.action.MAIN -c android.intent.category.HOME')
         if [ -s "$FAKE_HOME_STATE" ]; then cat "$FAKE_HOME_STATE"
@@ -128,6 +137,11 @@ case "$*" in
     install\ -r\ *kara-settings-v5-signed.apk)
         printf 'package:local.kara.settingsredirector\n' >> "$FAKE_ACTIVE_PACKAGES"
         printf 'Success\n' ;;
+    push\ *\ /data/local/tmp/kara-ghostlock-PS7713-5443.arm) printf '1 file pushed\n' ;;
+    'shell chmod 700 /data/local/tmp/kara-ghostlock-PS7713-5443.arm') : ;;
+    'shell /data/local/tmp/kara-ghostlock-PS7713-5443.arm --probe') printf 'KARA_V2_PROBE=PASS\n' ;;
+    shell\ nohup\ /data/local/tmp/kara-ghostlock-PS7713-5443.arm\ --live\ RUN-KARA-PS7713-GHOSTLOCK-V2*)
+        if [ "${FAKE_EXPLOIT_ROOT_EFFECT:-1}" = 1 ]; then printf '1\n' > "$FAKE_ROOT_STATE"; fi ;;
     'shell cmd package set-home-activity com.spocky.projengmenu/.ui.home.MainActivity')
         if [ "${FAKE_SET_HOME_EFFECT:-1}" = 1 ]; then
             printf 'com.spocky.projengmenu/.ui.home.MainActivity\n' > "$FAKE_HOME_STATE"
@@ -139,18 +153,64 @@ case "$*" in
         grep -Fvx "package:$package" "$FAKE_ACTIVE_PACKAGES" > "$FAKE_ACTIVE_PACKAGES.next" || true
         mv "$FAKE_ACTIVE_PACKAGES.next" "$FAKE_ACTIVE_PACKAGES"
         printf 'Success\n' ;;
-    shell\ /data/local/tmp/kara-root-helper\ --cmd\ *)
+    shell\ /data/local/tmp/*\ --cmd\ *)
+        case "$*" in *kara-root-helper*) root_ready=1 ;; *) root_ready=$(cat "$FAKE_ROOT_STATE") ;; esac
+        if [ "$root_ready" != 1 ]; then
+            printf 'connect kara root socket: No such file or directory\n' >&2
+            exit 2
+        fi
         grep -Fvx 'package:com.amazon.vizzini' "$FAKE_ACTIVE_PACKAGES" > "$FAKE_ACTIVE_PACKAGES.next" || true
         mv "$FAKE_ACTIVE_PACKAGES.next" "$FAKE_ACTIVE_PACKAGES"
-        printf 'Success\n' ;;
+        printf 'uid=0(root) gid=0(root) context=u:r:kernel:s0\n'
+        printf 'ROOTED uid=0 euid=0 context=u:r:kernel:s0 enforce=0 build=0035334210436\n' ;;
     'shell settings get global ota_disable_automatic_update') cat "$FAKE_OTA_STATE" ;;
     'shell settings put global ota_disable_automatic_update 1') printf '1\n' > "$FAKE_OTA_STATE" ;;
+    'shell settings get secure block_cec_standby') cat "$FAKE_CEC_STATE" ;;
+    'shell settings put secure block_cec_standby 1') printf '1\n' > "$FAKE_CEC_STATE" ;;
+    'shell settings put secure block_cec_standby 0') printf '0\n' > "$FAKE_CEC_STATE" ;;
+    'shell settings delete secure block_cec_standby') printf 'null\n' > "$FAKE_CEC_STATE" ;;
     'shell cmd package install-existing --user 0 com.amazon.'*) printf 'Package installed\n' ;;
     'shell cmd package set-home-activity com.amazon.tv.launcher/.ui.HomeActivity') : ;;
     *) : ;;
 esac
 EOF
-    chmod +x "$fixture/bin/curl" "$fixture/bin/aapt" "$fixture/bin/apksigner" "$fixture/bin/adb"
+    cat > "$fixture/bin/scp" <<'EOF'
+#!/bin/sh
+set -eu
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -o) shift 2 ;;
+        -q|--) shift ;;
+        *) break ;;
+    esac
+done
+[ "$#" -eq 2 ] || exit 91
+source_file=$1
+destination=$2
+remote_file=${destination#*:}
+printf 'scp %s %s\n' "$source_file" "$destination" >> "$FAKE_BRIDGE_LOG"
+cp "$source_file" "$remote_file"
+EOF
+    cat > "$fixture/bin/ssh" <<'EOF'
+#!/bin/sh
+set -eu
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -o) shift 2 ;;
+        *) break ;;
+    esac
+done
+host=$1
+shift
+printf 'ssh %s %s\n' "$host" "$*" >> "$FAKE_BRIDGE_LOG"
+if [ "$#" -eq 1 ]; then
+    sh -c "$1"
+else
+    "$@"
+fi
+EOF
+    chmod +x "$fixture/bin/curl" "$fixture/bin/aapt" "$fixture/bin/apksigner" \
+        "$fixture/bin/adb" "$fixture/bin/scp" "$fixture/bin/ssh"
 }
 
 run_tool() {
@@ -164,12 +224,16 @@ run_tool() {
     FAKE_EXPLOIT_RELEASE_JSON="$fixture/exploit-release.json" \
     FAKE_EXPLOIT_BINARY="$fixture/kara-exploit.arm" \
     FAKE_ADB_LOG="$fixture/adb.log" \
+    FAKE_BRIDGE_LOG="$fixture/bridge.log" \
     FAKE_HOME_STATE="$fixture/home.state" \
     FAKE_ACTIVE_PACKAGES="$fixture/active.packages" \
     FAKE_OTA_STATE="$fixture/ota.state" \
+    FAKE_CEC_STATE="$fixture/cec.state" \
+    FAKE_ROOT_STATE="$fixture/root.state" \
     KARA_REMOVE_MANIFEST="$fixture/remove-user0.txt" \
     KARA_PRIVILEGED_MANIFEST="$fixture/remove-privileged.txt" \
     KARA_EXPLOIT_EXPECTED_SHA256="$fixture_exploit_digest" \
+    KARA_ROOT_WAIT_ATTEMPTS=1 \
     KARA_CACHE_DIR="$fixture/cache" KARA_BACKUP_DIR="$fixture/backups" \
     "$tool" "$@"
 }
@@ -267,6 +331,74 @@ test_uses_explicit_root_helper_for_protected_package() {
         ok 'uses explicit root helper for protected package'
     else
         not_ok 'uses explicit root helper for protected package'; cat "$fixture/out"; cat "$fixture/adb.log"
+    fi
+    rm -rf "$fixture"
+}
+
+test_apply_obtains_temporary_root_before_mutation() {
+    new_fixture
+    printf 'package:com.amazon.vizzini\n' >> "$fixture/active.packages"
+    if run_tool --yes apply >"$fixture/out" 2>&1; then
+        push_line=$(grep -n 'push .*kara-ghostlock-PS7713-5443.arm /data/local/tmp/kara-ghostlock-PS7713-5443.arm' "$fixture/adb.log" | head -n 1 | cut -d: -f1)
+        probe_line=$(grep -n -- '--probe' "$fixture/adb.log" | head -n 1 | cut -d: -f1)
+        live_line=$(grep -n -- '--live RUN-KARA-PS7713-GHOSTLOCK-V2' "$fixture/adb.log" | head -n 1 | cut -d: -f1)
+        install_line=$(grep -n '^install -r ' "$fixture/adb.log" | head -n 1 | cut -d: -f1)
+        if [ -n "$push_line" ] && [ "$push_line" -lt "$probe_line" ] &&
+            [ "$probe_line" -lt "$live_line" ] && [ "$live_line" -lt "$install_line" ] &&
+            grep -F 'TEMP_ROOT=PASS' "$fixture/out" >/dev/null &&
+            grep -F 'PRIVILEGED_REMOVAL=PASS' "$fixture/out" >/dev/null
+        then
+            ok 'apply obtains temporary root before package mutation'
+        else
+            not_ok 'apply obtains temporary root before package mutation'; cat "$fixture/out"; cat "$fixture/adb.log"
+        fi
+    else
+        not_ok 'apply obtains temporary root before package mutation'; cat "$fixture/out"; cat "$fixture/adb.log"
+    fi
+    rm -rf "$fixture"
+}
+
+test_refuses_wrong_kernel_before_exploit_or_mutation() {
+    new_fixture
+    if FAKE_KERNEL=4.14.88 run_tool --yes apply >"$fixture/out" 2>&1; then
+        not_ok 'refuses wrong kernel before exploit or mutation'
+    elif grep -F 'unsupported kernel release' "$fixture/out" >/dev/null &&
+        ! grep -E 'push |--probe|--live|install -r|set-home-activity|pm uninstall|settings put' "$fixture/adb.log" >/dev/null
+    then
+        ok 'refuses wrong kernel before exploit or mutation'
+    else
+        not_ok 'refuses wrong kernel before exploit or mutation'; cat "$fixture/out"; cat "$fixture/adb.log"
+    fi
+    rm -rf "$fixture"
+}
+
+test_root_failure_aborts_before_package_mutation_and_rolls_back_cec() {
+    new_fixture
+    if FAKE_EXPLOIT_ROOT_EFFECT=0 run_tool --yes apply >"$fixture/out" 2>&1; then
+        not_ok 'root failure aborts before package mutation'
+    elif grep -F 'temporary root was not obtained' "$fixture/out" >/dev/null &&
+        ! grep -E 'install -r|pm uninstall' "$fixture/adb.log" >/dev/null &&
+        [ "$(cat "$fixture/cec.state")" = 0 ] &&
+        grep -F 'AUTOMATIC_ROLLBACK=PASS' "$fixture/out" >/dev/null
+    then
+        ok 'root failure aborts before package mutation and rolls back CEC guard'
+    else
+        not_ok 'root failure aborts before package mutation'; cat "$fixture/out"; cat "$fixture/adb.log"
+    fi
+    rm -rf "$fixture"
+}
+
+test_ssh_bridge_stages_every_local_payload() {
+    new_fixture
+    if run_tool --bridge root@test --yes apply >"$fixture/out" 2>&1 &&
+        [ "$(grep -c '^scp ' "$fixture/bridge.log")" -eq 4 ] &&
+        grep -E "push /tmp/kara-tool-[0-9]+-kara-ghostlock-PS7713-5443.arm /data/local/tmp/" "$fixture/adb.log" >/dev/null &&
+        [ "$(grep -c "install -r /tmp/kara-tool-" "$fixture/adb.log")" -eq 3 ] &&
+        [ "$(grep -c "ssh root@test rm -f /tmp/kara-tool-" "$fixture/bridge.log")" -eq 4 ]
+    then
+        ok 'SSH bridge stages and cleans every local payload'
+    else
+        not_ok 'SSH bridge stages and cleans every local payload'; cat "$fixture/out"; cat "$fixture/bridge.log"; cat "$fixture/adb.log"
     fi
     rm -rf "$fixture"
 }
@@ -413,6 +545,10 @@ test_rejects_wrong_kara_exploit_asset_name
 test_rejects_missing_kara_exploit_digest
 test_rejects_unpinned_kara_exploit_digest
 test_rejects_duplicate_kara_exploit_asset
+test_apply_obtains_temporary_root_before_mutation
+test_refuses_wrong_kernel_before_exploit_or_mutation
+test_root_failure_aborts_before_package_mutation_and_rolls_back_cec
+test_ssh_bridge_stages_every_local_payload
 test_rejects_nonofficial_projectivy_url
 test_refuses_wrong_model_before_mutation
 test_requires_confirmation_before_mutation
