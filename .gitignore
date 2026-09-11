@@ -1,0 +1,8 @@
+backups/
+cache/
+*.part
+*.keystore
+*.jks
+*.log
+.DS_Store
+__pycache__/

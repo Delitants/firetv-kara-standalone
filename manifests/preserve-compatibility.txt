@@ -1,0 +1,16 @@
+com.amazon.appaccesskeyprovider
+com.amazon.application.compatibility.enforcer
+com.amazon.client.metrics
+com.amazon.csm.htmlruntime
+com.amazon.device.logmanager
+com.amazon.device.rdmapplication
+com.amazon.identity.auth.device.authorization
+com.amazon.imp
+com.amazon.notification
+com.amazon.prism.android.service
+com.amazon.privacypassservice
+com.amazon.securitysyncclient
+com.amazon.tv.notificationcenter
+com.amazon.tv.oobe
+com.amazon.tv.routing
+com.amazon.uxnotification
