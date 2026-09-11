@@ -13,7 +13,7 @@ SUPPORTED_MODEL=AFTKA
 SUPPORTED_BUILD=0035334210436
 SUPPORTED_API=28
 
-base=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+base=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 manifest=${KARA_REMOVE_MANIFEST:-"$base/manifests/remove-user0.txt"}
 privileged_manifest=${KARA_PRIVILEGED_MANIFEST:-"$base/manifests/remove-privileged.txt"}
 cache_dir=${KARA_CACHE_DIR:-"$base/cache"}
@@ -180,9 +180,10 @@ PY
         *) fail 'untrusted Projectivy asset URL' ;;
     esac
     expected_digest=${asset_digest#sha256:}
-    [ "sha256:$expected_digest" = "$asset_digest" ] &&
-        printf '%s\n' "$expected_digest" | grep -Eq '^[0-9a-f]{64}$' ||
+    if [ "sha256:$expected_digest" != "$asset_digest" ] ||
+        ! printf '%s\n' "$expected_digest" | grep -Eq '^[0-9a-f]{64}$'; then
         fail 'official release is missing a valid SHA-256 digest'
+    fi
     "$CURL" -fsSL --proto '=https' --tlsv1.2 "$asset_url" -o "$temp_dir/projectivy.apk.part"
     actual_digest=$(sha256_file "$temp_dir/projectivy.apk.part")
     [ "$actual_digest" = "$expected_digest" ] || fail 'Projectivy SHA-256 mismatch'
@@ -424,11 +425,15 @@ verify_device() {
 restore_backup() {
     [ "$assume_yes" -eq 1 ] || fail 'restore requires --yes'
     mutation_identity_gate
-    [ -n "$backup_dir" ] && [ -d "$backup_dir" ] || fail 'restore requires a readable --backup directory'
+    if [ -z "$backup_dir" ] || [ ! -d "$backup_dir" ]; then
+        fail 'restore requires a readable --backup directory'
+    fi
     state="$backup_dir/state.env"
     packages="$backup_dir/packages-user0.txt"
     disabled="$backup_dir/packages-disabled-user0.txt"
-    [ -r "$state" ] && [ -r "$packages" ] && [ -r "$disabled" ] || fail 'backup is incomplete'
+    if [ ! -r "$state" ] || [ ! -r "$packages" ] || [ ! -r "$disabled" ]; then
+        fail 'backup is incomplete'
+    fi
     backup_device=$(sed -n 's/^DEVICE=//p' "$state")
     backup_model=$(sed -n 's/^MODEL=//p' "$state")
     backup_build=$(sed -n 's/^BUILD=//p' "$state")
