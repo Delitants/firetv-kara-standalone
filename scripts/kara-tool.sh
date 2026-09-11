@@ -466,6 +466,8 @@ install_aurora() {
 
 verify_root_helper() {
     printf '%s\n' "$root_helper" | grep -Eq '^/data/local/tmp/[A-Za-z0-9._-]+$' || fail 'unsafe root-helper path'
+    # The single-quoted variables expand on the device, not in this shell.
+    # shellcheck disable=SC2016
     root_command='id; cat /data/local/tmp/kara-root-ready; for p in /proc/[0-9]*; do e=$(readlink "$p/exe" 2>/dev/null); if [ "$e" = '"$root_helper"' ]; then echo "DAEMON_EXE=$e"; exit 0; fi; done; exit 1'
     root_proof=$(device "$root_helper" --cmd "$root_command" 2>/dev/null) || return 1
     printf '%s\n' "$root_proof" | grep -F 'uid=0(root)' >/dev/null || return 1
@@ -475,6 +477,7 @@ verify_root_helper() {
 }
 
 verify_staged_ota_absent() {
+    # shellcheck disable=SC2016
     ota_check='for p in /data/ota_package /cache/recovery/command /cache/recovery/block.map; do [ ! -e "$p" ] || echo "PRESENT:$p"; done'
     ota_present=$(device "$root_helper" --cmd "$ota_check") || fail 'could not verify staged OTA paths'
     [ -z "$ota_present" ] || fail "staged OTA path remains: $ota_present"
