@@ -12,6 +12,10 @@ SUPPORTED_DEVICE=kara
 SUPPORTED_MODEL=AFTKA
 SUPPORTED_BUILD=0035334210436
 SUPPORTED_API=28
+KARA_EXPLOIT_REPO=Delitants/GhostLock
+KARA_EXPLOIT_TAG=kara-PS7713-5443-v1
+KARA_EXPLOIT_ASSET=kara-ghostlock-PS7713-5443.arm
+KARA_EXPLOIT_EXPECTED_SHA256=${KARA_EXPLOIT_EXPECTED_SHA256:-a42185d743ee1d4c9c46c1e35f5fa0a40f5e9a7f81450308c3eab297677847d5}
 
 base=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 manifest=${KARA_REMOVE_MANIFEST:-"$base/manifests/remove-user0.txt"}
@@ -50,7 +54,8 @@ cleanup() {
     fi
     if [ -n "$temp_dir" ] && [ -d "$temp_dir" ]; then
         rm -f "$temp_dir/release.json" "$temp_dir/release.fields" \
-            "$temp_dir/projectivy.apk.part" "$temp_dir/aurora.apk.part"
+            "$temp_dir/projectivy.apk.part" "$temp_dir/aurora.apk.part" \
+            "$temp_dir/$KARA_EXPLOIT_ASSET.part"
         rmdir "$temp_dir" 2>/dev/null || true
     fi
     exit "$status"
@@ -68,6 +73,7 @@ Commands:
   audit                  Read-only device and package inventory
   download-projectivy    Download and authenticate official Projectivy APK
   download-aurora        Download and authenticate official Aurora Store APK
+  download-exploit       Download and authenticate the exact kara exploit
   backup                 Save user-0 package, HOME, OTA, and identity state
   apply                  Backup, install Projectivy, set HOME, and debloat
   verify                 Verify the supported durable configuration
@@ -205,6 +211,49 @@ PY
     printf 'PROJECTIVY_VERSION=%s\n' "$tag"
     printf 'PROJECTIVY_APK=%s\n' "$final_apk"
     printf 'PROJECTIVY_SHA256=%s\n' "$actual_digest"
+}
+
+download_exploit() {
+    need "$CURL"
+    need python3
+    mkdir -p "$cache_dir"
+    temp_dir=$(mktemp -d "${TMPDIR:-/tmp}/kara-exploit.XXXXXX")
+    api_url="https://api.github.com/repos/$KARA_EXPLOIT_REPO/releases/tags/$KARA_EXPLOIT_TAG"
+    "$CURL" -fsSL --proto '=https' --tlsv1.2 "$api_url" -o "$temp_dir/release.json"
+    python3 - "$temp_dir/release.json" "$KARA_EXPLOIT_TAG" "$KARA_EXPLOIT_ASSET" > "$temp_dir/release.fields" <<'PY'
+import json, re, sys
+
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+expected_tag, expected_name = sys.argv[2:4]
+if data.get("tag_name") != expected_tag:
+    raise SystemExit("unexpected kara exploit release tag")
+assets = [asset for asset in data.get("assets", [])
+          if asset.get("name") == expected_name]
+if len(assets) != 1:
+    raise SystemExit("missing or ambiguous kara exploit asset")
+asset = assets[0]
+url = asset.get("browser_download_url", "")
+digest = asset.get("digest", "")
+if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+    raise SystemExit("kara exploit release is missing a valid SHA-256 digest")
+print(url)
+print(digest)
+PY
+    asset_url=$(sed -n '1p' "$temp_dir/release.fields")
+    asset_digest=$(sed -n '2p' "$temp_dir/release.fields")
+    expected_url="https://github.com/$KARA_EXPLOIT_REPO/releases/download/$KARA_EXPLOIT_TAG/$KARA_EXPLOIT_ASSET"
+    [ "$asset_url" = "$expected_url" ] || fail 'untrusted kara exploit asset URL'
+    published_digest=${asset_digest#sha256:}
+    [ "$published_digest" = "$KARA_EXPLOIT_EXPECTED_SHA256" ] ||
+        fail 'published kara exploit digest does not match the live-tested artifact'
+    "$CURL" -fsSL --proto '=https' --tlsv1.2 "$asset_url" -o "$temp_dir/$KARA_EXPLOIT_ASSET.part"
+    actual_digest=$(sha256_file "$temp_dir/$KARA_EXPLOIT_ASSET.part")
+    [ "$actual_digest" = "$published_digest" ] || fail 'kara exploit SHA-256 mismatch'
+    final_exploit="$cache_dir/$KARA_EXPLOIT_ASSET"
+    mv "$temp_dir/$KARA_EXPLOIT_ASSET.part" "$final_exploit"
+    printf 'KARA_EXPLOIT_VERSION=%s\n' "$KARA_EXPLOIT_TAG"
+    printf 'KARA_EXPLOIT_PATH=%s\n' "$final_exploit"
+    printf 'KARA_EXPLOIT_SHA256=%s\n' "$actual_digest"
 }
 
 download_aurora() {
@@ -463,6 +512,7 @@ case "$command_name" in
     audit) audit_device ;;
     download-projectivy) download_projectivy ;;
     download-aurora) download_aurora ;;
+    download-exploit) download_exploit ;;
     backup) create_backup ;;
     apply) apply_changes ;;
     verify) verify_device ;;

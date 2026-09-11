@@ -14,13 +14,22 @@ new_fixture() {
     mkdir -p "$fixture/bin" "$fixture/cache" "$fixture/backups"
     printf 'fixture official Projectivy APK\n' > "$fixture/projectivy.apk"
     printf 'fixture official Aurora Store APK\n' > "$fixture/aurora.apk"
+    printf 'fixture kara exploit ELF\n' > "$fixture/kara-exploit.arm"
     printf 'package:com.amazon.tv.launcher\npackage:com.amazon.device.software.ota\n' > "$fixture/active.packages"
     printf 'com.amazon.tv.launcher\ncom.amazon.device.software.ota\n' > "$fixture/remove-user0.txt"
     printf 'com.amazon.vizzini\n' > "$fixture/remove-privileged.txt"
     printf '0\n' > "$fixture/ota.state"
     fixture_digest=$(shasum -a 256 "$fixture/projectivy.apk" | awk '{print $1}')
+    fixture_exploit_digest=$(shasum -a 256 "$fixture/kara-exploit.arm" | awk '{print $1}')
+    exploit_duplicate=
+    if [ "${FAKE_EXPLOIT_DUPLICATE:-0}" = 1 ]; then
+        exploit_duplicate=',{"name":"kara-ghostlock-PS7713-5443.arm","browser_download_url":"https://github.com/Delitants/GhostLock/releases/download/kara-PS7713-5443-v1/kara-ghostlock-PS7713-5443.arm","digest":"sha256:'"$fixture_exploit_digest"'"}'
+    fi
     cat > "$fixture/release.json" <<EOF
 {"tag_name":"4.71","assets":[{"name":"ProjectivyLauncher-4.71-c95-xda-release.apk","browser_download_url":"${FAKE_RELEASE_URL:-https://github.com/spocky/miproja1/releases/download/4.71/ProjectivyLauncher-4.71-c95-xda-release.apk}","digest":"sha256:$fixture_digest"}]}
+EOF
+    cat > "$fixture/exploit-release.json" <<EOF
+{"tag_name":"kara-PS7713-5443-v1","assets":[{"name":"${FAKE_EXPLOIT_ASSET_NAME:-kara-ghostlock-PS7713-5443.arm}","browser_download_url":"${FAKE_EXPLOIT_URL:-https://github.com/Delitants/GhostLock/releases/download/kara-PS7713-5443-v1/kara-ghostlock-PS7713-5443.arm}","digest":"${FAKE_EXPLOIT_DIGEST:-sha256:$fixture_exploit_digest}"}$exploit_duplicate]}
 EOF
     cat > "$fixture/aurora-release.json" <<'EOF'
 {"name":"downloads","path":"/downloads","isDirectory":true,"contents":[{"name":"AuroraStore","path":"/downloads/AuroraStore","isDirectory":true,"contents":[{"name":"Release","path":"/downloads/AuroraStore/Release","isDirectory":true,"contents":[{"name":"AuroraStore-4.8.4.apk","path":"/downloads/AuroraStore/Release/AuroraStore-4.8.4.apk","isDirectory":false,"mimeType":"application/vnd.android.package-archive","size":9362660}]}]}]}
@@ -48,6 +57,10 @@ case "$url" in
         cp "$FAKE_AURORA_RELEASE_JSON" "$out" ;;
     https://auroraoss.com/downloads/AuroraStore/Release/AuroraStore-*.apk)
         cp "$FAKE_AURORA_APK" "$out" ;;
+    https://api.github.com/repos/Delitants/GhostLock/releases/tags/kara-PS7713-5443-v1)
+        cp "$FAKE_EXPLOIT_RELEASE_JSON" "$out" ;;
+    https://github.com/Delitants/GhostLock/releases/download/kara-PS7713-5443-v1/kara-ghostlock-PS7713-5443.arm)
+        cp "$FAKE_EXPLOIT_BINARY" "$out" ;;
     *) printf 'unexpected URL: %s\n' "$url" >&2; exit 90 ;;
 esac
 EOF
@@ -148,14 +161,90 @@ run_tool() {
     FAKE_PROJECTIVY_APK="$fixture/projectivy.apk" \
     FAKE_AURORA_RELEASE_JSON="$fixture/aurora-release.json" \
     FAKE_AURORA_APK="$fixture/aurora.apk" \
+    FAKE_EXPLOIT_RELEASE_JSON="$fixture/exploit-release.json" \
+    FAKE_EXPLOIT_BINARY="$fixture/kara-exploit.arm" \
     FAKE_ADB_LOG="$fixture/adb.log" \
     FAKE_HOME_STATE="$fixture/home.state" \
     FAKE_ACTIVE_PACKAGES="$fixture/active.packages" \
     FAKE_OTA_STATE="$fixture/ota.state" \
     KARA_REMOVE_MANIFEST="$fixture/remove-user0.txt" \
     KARA_PRIVILEGED_MANIFEST="$fixture/remove-privileged.txt" \
+    KARA_EXPLOIT_EXPECTED_SHA256="$fixture_exploit_digest" \
     KARA_CACHE_DIR="$fixture/cache" KARA_BACKUP_DIR="$fixture/backups" \
     "$tool" "$@"
+}
+
+test_downloads_and_verifies_kara_exploit() {
+    new_fixture
+    if output=$(run_tool download-exploit 2>&1) &&
+        [ -f "$fixture/cache/kara-ghostlock-PS7713-5443.arm" ] &&
+        printf '%s\n' "$output" | grep -F "KARA_EXPLOIT_SHA256=$fixture_exploit_digest" >/dev/null
+    then
+        ok 'downloads and verifies the kara exploit'
+    else
+        not_ok 'downloads and verifies the kara exploit'; printf '%s\n' "$output"
+    fi
+    rm -rf "$fixture"
+}
+
+test_rejects_untrusted_kara_exploit_url() {
+    FAKE_EXPLOIT_URL=https://evil.invalid/kara.arm new_fixture
+    if run_tool download-exploit >"$fixture/out" 2>&1; then
+        not_ok 'rejects untrusted kara exploit URL'
+    elif grep -F 'untrusted kara exploit asset URL' "$fixture/out" >/dev/null; then
+        ok 'rejects untrusted kara exploit URL'
+    else
+        not_ok 'rejects untrusted kara exploit URL'; cat "$fixture/out"
+    fi
+    rm -rf "$fixture"
+}
+
+test_rejects_wrong_kara_exploit_asset_name() {
+    FAKE_EXPLOIT_ASSET_NAME=wrong.arm new_fixture
+    if run_tool download-exploit >"$fixture/out" 2>&1; then
+        not_ok 'rejects wrong kara exploit asset name'
+    elif grep -F 'missing or ambiguous kara exploit asset' "$fixture/out" >/dev/null; then
+        ok 'rejects wrong kara exploit asset name'
+    else
+        not_ok 'rejects wrong kara exploit asset name'; cat "$fixture/out"
+    fi
+    rm -rf "$fixture"
+}
+
+test_rejects_missing_kara_exploit_digest() {
+    FAKE_EXPLOIT_DIGEST=missing new_fixture
+    if run_tool download-exploit >"$fixture/out" 2>&1; then
+        not_ok 'rejects missing kara exploit digest'
+    elif grep -F 'missing a valid SHA-256 digest' "$fixture/out" >/dev/null; then
+        ok 'rejects missing kara exploit digest'
+    else
+        not_ok 'rejects missing kara exploit digest'; cat "$fixture/out"
+    fi
+    rm -rf "$fixture"
+}
+
+test_rejects_unpinned_kara_exploit_digest() {
+    FAKE_EXPLOIT_DIGEST=sha256:0000000000000000000000000000000000000000000000000000000000000000 new_fixture
+    if run_tool download-exploit >"$fixture/out" 2>&1; then
+        not_ok 'rejects unpinned kara exploit digest'
+    elif grep -F 'does not match the live-tested artifact' "$fixture/out" >/dev/null; then
+        ok 'rejects unpinned kara exploit digest'
+    else
+        not_ok 'rejects unpinned kara exploit digest'; cat "$fixture/out"
+    fi
+    rm -rf "$fixture"
+}
+
+test_rejects_duplicate_kara_exploit_asset() {
+    FAKE_EXPLOIT_DUPLICATE=1 new_fixture
+    if run_tool download-exploit >"$fixture/out" 2>&1; then
+        not_ok 'rejects duplicate kara exploit asset'
+    elif grep -F 'missing or ambiguous kara exploit asset' "$fixture/out" >/dev/null; then
+        ok 'rejects duplicate kara exploit asset'
+    else
+        not_ok 'rejects duplicate kara exploit asset'; cat "$fixture/out"
+    fi
+    rm -rf "$fixture"
 }
 
 test_downloads_and_verifies_official_aurora() {
@@ -318,6 +407,12 @@ test_manifests_are_scoped_and_disjoint() {
 
 test_downloads_and_verifies_official_projectivy
 test_downloads_and_verifies_official_aurora
+test_downloads_and_verifies_kara_exploit
+test_rejects_untrusted_kara_exploit_url
+test_rejects_wrong_kara_exploit_asset_name
+test_rejects_missing_kara_exploit_digest
+test_rejects_unpinned_kara_exploit_digest
+test_rejects_duplicate_kara_exploit_asset
 test_rejects_nonofficial_projectivy_url
 test_refuses_wrong_model_before_mutation
 test_requires_confirmation_before_mutation
