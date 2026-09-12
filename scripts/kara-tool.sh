@@ -20,6 +20,10 @@ KARA_EXPLOIT_REPO=Delitants/GhostLock
 KARA_EXPLOIT_TAG=kara-PS7713-5443-v1
 KARA_EXPLOIT_ASSET=kara-ghostlock-PS7713-5443.arm
 KARA_EXPLOIT_EXPECTED_SHA256=${KARA_EXPLOIT_EXPECTED_SHA256:-a42185d743ee1d4c9c46c1e35f5fa0a40f5e9a7f81450308c3eab297677847d5}
+KARA_EXPERIMENTAL_TAG=kara-experimental-newer-v1
+KARA_EXPERIMENTAL_ASSET=kara-ghostlock-experimental-newer.arm
+KARA_EXPERIMENTAL_EXPECTED_SHA256=${KARA_EXPERIMENTAL_EXPECTED_SHA256:-d0978d3fcc938150cdc8992243b7a70eedc285ac833ff7a20e99e7b49610a8be}
+KARA_EXPERIMENTAL_CONFIRMATION=RUN-KARA-EXPERIMENTAL-NEWER-I-ACCEPT-WATCHDOG-REBOOT
 KARA_ROOT_WAIT_ATTEMPTS=${KARA_ROOT_WAIT_ATTEMPTS:-20}
 
 base=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
@@ -38,9 +42,12 @@ aurora_release=latest
 backup_dir=
 root_helper=
 assume_yes=0
+accept_watchdog_reboot=0
+newer_build=
 temp_dir=
 current_backup=
 rollback_needed=0
+rollback_cec_only=0
 bridge_temp=
 
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
@@ -55,7 +62,12 @@ cleanup() {
     if [ "$status" -ne 0 ] && [ "$rollback_needed" -eq 1 ] && [ -n "$current_backup" ]; then
         saved_backup_dir=$backup_dir
         backup_dir=$current_backup
-        if (restore_backup) >&2; then
+        if [ "$rollback_cec_only" -eq 1 ]; then
+            rollback_action=restore_cec_guard
+        else
+            rollback_action=restore_backup
+        fi
+        if ("$rollback_action") >&2; then
             printf 'AUTOMATIC_ROLLBACK=PASS\n' >&2
         else
             printf 'AUTOMATIC_ROLLBACK=FAIL backup=%s\n' "$current_backup" >&2
@@ -65,7 +77,7 @@ cleanup() {
     if [ -n "$temp_dir" ] && [ -d "$temp_dir" ]; then
         rm -f "$temp_dir/release.json" "$temp_dir/release.fields" \
             "$temp_dir/projectivy.apk.part" "$temp_dir/aurora.apk.part" \
-            "$temp_dir/$KARA_EXPLOIT_ASSET.part"
+            "$temp_dir/$KARA_EXPLOIT_ASSET.part" "$temp_dir/$KARA_EXPERIMENTAL_ASSET.part"
         rmdir "$temp_dir" 2>/dev/null || true
     fi
     exit "$status"
@@ -84,6 +96,9 @@ Commands:
   download-projectivy    Download and authenticate official Projectivy APK
   download-aurora        Download and authenticate official Aurora Store APK
   download-exploit       Download and authenticate the exact kara exploit
+  download-experimental  Download the separate unvalidated newer-build exploit
+  probe-newer            Run only the safe compatibility probe on a newer build
+  test-newer             Make one experimental temporary-root attempt
   backup                 Save user-0 package, HOME, OTA, and identity state
   apply                  Backup, install Projectivy, set HOME, and debloat
   verify                 Verify the supported durable configuration
@@ -96,7 +111,10 @@ Options:
   --aurora TAG           Aurora Store release tag (default: latest)
   --backup DIRECTORY     Backup directory for restore
   --root-helper PATH     Existing device helper accepting: --cmd COMMAND
-  --yes                  Required for apply and restore
+  --newer-build BUILD    Exact 13-digit newer build shown by the target
+  --accept-watchdog-reboot
+                         Required for test-newer; the Stick may reboot
+  --yes                  Required for mutating or experimental commands
 EOF
 }
 
@@ -108,6 +126,8 @@ while [ "$#" -gt 0 ]; do
         --aurora) [ "$#" -ge 2 ] || fail '--aurora needs a tag'; aurora_release=$2; shift 2 ;;
         --backup) [ "$#" -ge 2 ] || fail '--backup needs a directory'; backup_dir=$2; shift 2 ;;
         --root-helper) [ "$#" -ge 2 ] || fail '--root-helper needs a device path'; root_helper=$2; shift 2 ;;
+        --newer-build) [ "$#" -ge 2 ] || fail '--newer-build needs a value'; newer_build=$2; shift 2 ;;
+        --accept-watchdog-reboot) accept_watchdog_reboot=1; shift ;;
         --yes) assume_yes=1; shift ;;
         -h|--help) usage; exit 0 ;;
         -*) fail "unknown option: $1" ;;
@@ -207,6 +227,21 @@ mutation_identity_gate() {
     [ "$actual_api" = "$SUPPORTED_API" ] || fail "unsupported Android API: $actual_api"
 }
 
+newer_identity_gate() {
+    identity_values
+    [ "$actual_device" = "$SUPPORTED_DEVICE" ] || fail "unsupported device: $actual_device"
+    [ "$actual_model" = "$SUPPORTED_MODEL" ] || fail "unsupported model: $actual_model"
+    [ "$actual_api" = "$SUPPORTED_API" ] || fail "unsupported Android API: $actual_api"
+    [ -n "$newer_build" ] || fail 'experimental commands require --newer-build BUILD'
+    case "$newer_build" in *[!0-9]*) fail 'newer build must be exactly 13 decimal digits' ;; esac
+    [ "${#newer_build}" -eq 13 ] || fail 'newer build must be exactly 13 decimal digits'
+    [ "$actual_build" = "$newer_build" ] ||
+        fail "requested newer build does not match target: requested=$newer_build actual=$actual_build"
+    awk -v requested="$newer_build" -v baseline="$SUPPORTED_BUILD" \
+        'BEGIN { exit !(requested > baseline) }' ||
+        fail "build is not newer than supported baseline: $newer_build"
+}
+
 exploit_runtime_values() {
     actual_kernel=$(device uname -r)
     actual_machine=$(device uname -m)
@@ -290,14 +325,18 @@ PY
     printf 'PROJECTIVY_SHA256=%s\n' "$actual_digest"
 }
 
-download_exploit() {
+download_kara_release() {
+    release_tag=$1
+    release_asset=$2
+    pinned_digest=$3
+    output_prefix=$4
     need "$CURL"
     need python3
     mkdir -p "$cache_dir"
     temp_dir=$(mktemp -d "${TMPDIR:-/tmp}/kara-exploit.XXXXXX")
-    api_url="https://api.github.com/repos/$KARA_EXPLOIT_REPO/releases/tags/$KARA_EXPLOIT_TAG"
+    api_url="https://api.github.com/repos/$KARA_EXPLOIT_REPO/releases/tags/$release_tag"
     "$CURL" -fsSL --proto '=https' --tlsv1.2 "$api_url" -o "$temp_dir/release.json"
-    python3 - "$temp_dir/release.json" "$KARA_EXPLOIT_TAG" "$KARA_EXPLOIT_ASSET" > "$temp_dir/release.fields" <<'PY'
+    python3 - "$temp_dir/release.json" "$release_tag" "$release_asset" > "$temp_dir/release.fields" <<'PY'
 import json, re, sys
 
 data = json.load(open(sys.argv[1], encoding="utf-8"))
@@ -318,19 +357,29 @@ print(digest)
 PY
     asset_url=$(sed -n '1p' "$temp_dir/release.fields")
     asset_digest=$(sed -n '2p' "$temp_dir/release.fields")
-    expected_url="https://github.com/$KARA_EXPLOIT_REPO/releases/download/$KARA_EXPLOIT_TAG/$KARA_EXPLOIT_ASSET"
+    expected_url="https://github.com/$KARA_EXPLOIT_REPO/releases/download/$release_tag/$release_asset"
     [ "$asset_url" = "$expected_url" ] || fail 'untrusted kara exploit asset URL'
     published_digest=${asset_digest#sha256:}
-    [ "$published_digest" = "$KARA_EXPLOIT_EXPECTED_SHA256" ] ||
+    [ "$published_digest" = "$pinned_digest" ] ||
         fail 'published kara exploit digest does not match the live-tested artifact'
-    "$CURL" -fsSL --proto '=https' --tlsv1.2 "$asset_url" -o "$temp_dir/$KARA_EXPLOIT_ASSET.part"
-    actual_digest=$(sha256_file "$temp_dir/$KARA_EXPLOIT_ASSET.part")
+    "$CURL" -fsSL --proto '=https' --tlsv1.2 "$asset_url" -o "$temp_dir/$release_asset.part"
+    actual_digest=$(sha256_file "$temp_dir/$release_asset.part")
     [ "$actual_digest" = "$published_digest" ] || fail 'kara exploit SHA-256 mismatch'
-    final_exploit="$cache_dir/$KARA_EXPLOIT_ASSET"
-    mv "$temp_dir/$KARA_EXPLOIT_ASSET.part" "$final_exploit"
-    printf 'KARA_EXPLOIT_VERSION=%s\n' "$KARA_EXPLOIT_TAG"
-    printf 'KARA_EXPLOIT_PATH=%s\n' "$final_exploit"
-    printf 'KARA_EXPLOIT_SHA256=%s\n' "$actual_digest"
+    final_exploit="$cache_dir/$release_asset"
+    mv "$temp_dir/$release_asset.part" "$final_exploit"
+    printf '%s_VERSION=%s\n' "$output_prefix" "$release_tag"
+    printf '%s_PATH=%s\n' "$output_prefix" "$final_exploit"
+    printf '%s_SHA256=%s\n' "$output_prefix" "$actual_digest"
+}
+
+download_exploit() {
+    download_kara_release "$KARA_EXPLOIT_TAG" "$KARA_EXPLOIT_ASSET" \
+        "$KARA_EXPLOIT_EXPECTED_SHA256" KARA_EXPLOIT
+}
+
+download_experimental() {
+    download_kara_release "$KARA_EXPERIMENTAL_TAG" "$KARA_EXPERIMENTAL_ASSET" \
+        "$KARA_EXPERIMENTAL_EXPECTED_SHA256" KARA_EXPERIMENTAL
 }
 
 download_aurora() {
@@ -411,8 +460,7 @@ PY
     printf 'AURORA_SHA256=%s\n' "$actual_digest"
 }
 
-create_backup() {
-    mutation_identity_gate
+create_backup_values() {
     mkdir -p "$backup_root"
     stamp=$(date -u +%Y%m%dT%H%M%SZ)
     current_backup="$backup_root/$stamp-$$"
@@ -436,6 +484,22 @@ create_backup() {
     device pm list packages --user 0 > "$current_backup/packages-user0.txt"
     device pm list packages -d --user 0 > "$current_backup/packages-disabled-user0.txt"
     printf 'BACKUP_DIR=%s\n' "$current_backup"
+}
+
+create_backup() {
+    mutation_identity_gate
+    create_backup_values
+}
+
+restore_cec_guard() {
+    [ -n "$current_backup" ] || fail 'CEC restore has no backup'
+    state="$current_backup/state.env"
+    [ -r "$state" ] || fail 'CEC restore backup is incomplete'
+    old_cec=$(sed -n 's/^BLOCK_CEC_STANDBY=//p' "$state")
+    case "$old_cec" in
+        null|'') adb_call shell settings delete secure block_cec_standby >/dev/null ;;
+        *) adb_call shell settings put secure block_cec_standby "$old_cec" >/dev/null ;;
+    esac
 }
 
 install_projectivy() {
@@ -465,6 +529,8 @@ install_aurora() {
 }
 
 verify_root_helper() {
+    expected_build=${1:-$SUPPORTED_BUILD}
+    expected_mode=${2:-}
     printf '%s\n' "$root_helper" | grep -Eq '^/data/local/tmp/[A-Za-z0-9._-]+$' || fail 'unsafe root-helper path'
     # The single-quoted variables expand on the device, not in this shell.
     # shellcheck disable=SC2016
@@ -472,7 +538,10 @@ verify_root_helper() {
     root_proof=$(device "$root_helper" --cmd "$root_command" 2>/dev/null) || return 1
     printf '%s\n' "$root_proof" | grep -F 'uid=0(root)' >/dev/null || return 1
     printf '%s\n' "$root_proof" | grep -F 'ROOTED uid=0 euid=0' >/dev/null || return 1
-    printf '%s\n' "$root_proof" | grep -F "build=$SUPPORTED_BUILD" >/dev/null || return 1
+    printf '%s\n' "$root_proof" | grep -F "build=$expected_build" >/dev/null || return 1
+    if [ -n "$expected_mode" ]; then
+        printf '%s\n' "$root_proof" | grep -F "mode=$expected_mode" >/dev/null || return 1
+    fi
     printf '%s\n' "$root_proof" | grep -Fx "DAEMON_EXE=$root_helper" >/dev/null || return 1
 }
 
@@ -499,8 +568,11 @@ obtain_temp_root() {
     remote_exploit="/data/local/tmp/kara-ghostlock-$$"
     adb_push_file "$exploit_path" "$remote_exploit" >/dev/null || fail 'could not stage kara exploit'
     device chmod 700 "$remote_exploit" >/dev/null || fail 'could not make kara exploit executable'
-    probe_output=$(device "$remote_exploit" --probe) || fail 'kara exploit safe probe failed'
-    printf '%s\n' "$probe_output" | grep -F 'KARA_V2_PROBE=PASS' >/dev/null ||
+    probe_status=0
+    probe_output=$(adb_call shell "$remote_exploit" --probe 2>&1) || probe_status=$?
+    [ "$probe_status" -eq 0 ] || fail 'kara exploit safe probe failed'
+    printf '%s\n' "$probe_output" | tr -d '\r' | \
+        grep -F 'V2 SAFE PROBE PASS (reclaim and GhostLock were not invoked)' >/dev/null ||
         fail 'kara exploit safe probe did not pass'
 
     root_helper=$remote_exploit
@@ -514,6 +586,11 @@ obtain_temp_root() {
         fail 'could not start kara exploit'
     root_attempt=0
     while [ "$root_attempt" -lt "$KARA_ROOT_WAIT_ATTEMPTS" ]; do
+        # If identity changed while the live attempt started, restore only the
+        # CEC guard; replaying package state across firmware builds is unsafe.
+        rollback_cec_only=1
+        mutation_identity_gate
+        rollback_cec_only=0
         if verify_root_helper; then
             mutation_identity_gate
             printf 'TEMP_ROOT=PASS new-live-daemon\n'
@@ -523,6 +600,74 @@ obtain_temp_root() {
         sleep 1
     done
     fail 'temporary root was not obtained; no package changes were attempted'
+}
+
+begin_experimental_test() {
+    newer_identity_gate
+    exploit_runtime_gate
+    create_backup_values
+    rollback_needed=1
+    rollback_cec_only=1
+    adb_call shell settings put secure block_cec_standby 1 >/dev/null
+    [ "$(device settings get secure block_cec_standby)" = 1 ] ||
+        fail 'could not enable the exploit CEC reboot guard'
+}
+
+stage_and_probe_experimental() {
+    experimental_output=$(download_experimental)
+    printf '%s\n' "$experimental_output"
+    experimental_path=$(printf '%s\n' "$experimental_output" | sed -n 's/^KARA_EXPERIMENTAL_PATH=//p')
+    [ -f "$experimental_path" ] || fail 'verified experimental kara exploit is missing'
+    experimental_remote="/data/local/tmp/kara-ghostlock-experimental-$$"
+    adb_push_file "$experimental_path" "$experimental_remote" >/dev/null ||
+        fail 'could not stage experimental kara exploit'
+    device chmod 700 "$experimental_remote" >/dev/null ||
+        fail 'could not make experimental kara exploit executable'
+    experimental_probe_status=0
+    experimental_probe=$(adb_call shell "$experimental_remote" --probe-newer "$newer_build" 2>&1) ||
+        experimental_probe_status=$?
+    [ "$experimental_probe_status" -eq 0 ] || fail 'experimental newer-firmware safe probe failed'
+    printf '%s\n' "$experimental_probe" | tr -d '\r' | \
+        grep -Fx "KARA_EXPERIMENTAL_NEWER_PROBE=PASS build=$newer_build" >/dev/null ||
+        fail 'experimental newer-firmware safe probe did not pass'
+}
+
+probe_newer() {
+    [ "$assume_yes" -eq 1 ] || fail 'probe-newer requires --yes'
+    begin_experimental_test
+    stage_and_probe_experimental
+    device rm -f "$experimental_remote" >/dev/null || fail 'could not remove experimental probe binary'
+    restore_cec_guard
+    rollback_needed=0
+    rollback_cec_only=0
+    printf 'UNVALIDATED_NEWER_FIRMWARE=YES\n'
+    printf 'EXPERIMENTAL_NEWER_PROBE=PASS build=%s\n' "$newer_build"
+}
+
+test_newer() {
+    [ "$assume_yes" -eq 1 ] || fail 'test-newer requires --yes'
+    [ "$accept_watchdog_reboot" -eq 1 ] || fail 'test-newer requires --accept-watchdog-reboot'
+    begin_experimental_test
+    stage_and_probe_experimental
+    root_helper=$experimental_remote
+    adb_call shell "nohup $experimental_remote --live-newer $newer_build $KARA_EXPERIMENTAL_CONFIRMATION >/data/local/tmp/kara-ghostlock-experimental.start.log 2>&1 </dev/null &" >/dev/null ||
+        fail 'could not start experimental kara exploit'
+    root_attempt=0
+    while [ "$root_attempt" -lt "$KARA_ROOT_WAIT_ATTEMPTS" ]; do
+        if verify_root_helper "$newer_build" experimental-newer; then
+            newer_identity_gate
+            restore_cec_guard
+            rollback_needed=0
+            rollback_cec_only=0
+            printf 'UNVALIDATED_NEWER_FIRMWARE=YES\n'
+            printf 'EXPERIMENTAL_NEWER_ROOT=PASS build=%s\n' "$newer_build"
+            printf 'TEMPORARY_ROOT_REBOOT_REQUIRED=YES\n'
+            return
+        fi
+        root_attempt=$((root_attempt + 1))
+        sleep 1
+    done
+    fail 'experimental newer-firmware root was not obtained; reboot restores the stock security state'
 }
 
 remove_privileged_packages() {
@@ -671,6 +816,9 @@ case "$command_name" in
     download-projectivy) download_projectivy ;;
     download-aurora) download_aurora ;;
     download-exploit) download_exploit ;;
+    download-experimental) download_experimental ;;
+    probe-newer) probe_newer ;;
+    test-newer) test_newer ;;
     backup) create_backup ;;
     apply) apply_changes ;;
     verify) verify_device ;;

@@ -15,6 +15,7 @@ new_fixture() {
     printf 'fixture official Projectivy APK\n' > "$fixture/projectivy.apk"
     printf 'fixture official Aurora Store APK\n' > "$fixture/aurora.apk"
     printf 'fixture kara exploit ELF\n' > "$fixture/kara-exploit.arm"
+    printf 'fixture experimental kara exploit ELF\n' > "$fixture/kara-experimental.arm"
     printf 'package:com.amazon.tv.launcher\npackage:com.amazon.device.software.ota\n' > "$fixture/active.packages"
     printf 'com.amazon.tv.launcher\ncom.amazon.device.software.ota\n' > "$fixture/remove-user0.txt"
     printf 'com.amazon.vizzini\n' > "$fixture/remove-privileged.txt"
@@ -24,6 +25,7 @@ new_fixture() {
     printf '0035334210436\n' > "$fixture/build.state"
     fixture_digest=$(shasum -a 256 "$fixture/projectivy.apk" | awk '{print $1}')
     fixture_exploit_digest=$(shasum -a 256 "$fixture/kara-exploit.arm" | awk '{print $1}')
+    fixture_experimental_digest=$(shasum -a 256 "$fixture/kara-experimental.arm" | awk '{print $1}')
     exploit_duplicate=
     if [ "${FAKE_EXPLOIT_DUPLICATE:-0}" = 1 ]; then
         exploit_duplicate=',{"name":"kara-ghostlock-PS7713-5443.arm","browser_download_url":"https://github.com/Delitants/GhostLock/releases/download/kara-PS7713-5443-v1/kara-ghostlock-PS7713-5443.arm","digest":"sha256:'"$fixture_exploit_digest"'"}'
@@ -33,6 +35,9 @@ new_fixture() {
 EOF
     cat > "$fixture/exploit-release.json" <<EOF
 {"tag_name":"kara-PS7713-5443-v1","assets":[{"name":"${FAKE_EXPLOIT_ASSET_NAME:-kara-ghostlock-PS7713-5443.arm}","browser_download_url":"${FAKE_EXPLOIT_URL:-https://github.com/Delitants/GhostLock/releases/download/kara-PS7713-5443-v1/kara-ghostlock-PS7713-5443.arm}","digest":"${FAKE_EXPLOIT_DIGEST:-sha256:$fixture_exploit_digest}"}$exploit_duplicate]}
+EOF
+    cat > "$fixture/experimental-release.json" <<EOF
+{"tag_name":"kara-experimental-newer-v1","assets":[{"name":"kara-ghostlock-experimental-newer.arm","browser_download_url":"https://github.com/Delitants/GhostLock/releases/download/kara-experimental-newer-v1/kara-ghostlock-experimental-newer.arm","digest":"sha256:$fixture_experimental_digest"}]}
 EOF
     cat > "$fixture/aurora-release.json" <<'EOF'
 {"name":"downloads","path":"/downloads","isDirectory":true,"contents":[{"name":"AuroraStore","path":"/downloads/AuroraStore","isDirectory":true,"contents":[{"name":"Release","path":"/downloads/AuroraStore/Release","isDirectory":true,"contents":[{"name":"AuroraStore-4.8.4.apk","path":"/downloads/AuroraStore/Release/AuroraStore-4.8.4.apk","isDirectory":false,"mimeType":"application/vnd.android.package-archive","size":9362660}]}]}]}
@@ -65,6 +70,10 @@ case "$url" in
         cp "$FAKE_EXPLOIT_RELEASE_JSON" "$out" ;;
     https://github.com/Delitants/GhostLock/releases/download/kara-PS7713-5443-v1/kara-ghostlock-PS7713-5443.arm)
         cp "$FAKE_EXPLOIT_BINARY" "$out" ;;
+    https://api.github.com/repos/Delitants/GhostLock/releases/tags/kara-experimental-newer-v1)
+        cp "$FAKE_EXPERIMENTAL_RELEASE_JSON" "$out" ;;
+    https://github.com/Delitants/GhostLock/releases/download/kara-experimental-newer-v1/kara-ghostlock-experimental-newer.arm)
+        cp "$FAKE_EXPERIMENTAL_BINARY" "$out" ;;
     *) printf 'unexpected URL: %s\n' "$url" >&2; exit 90 ;;
 esac
 EOF
@@ -140,10 +149,20 @@ case "$*" in
         printf 'package:local.kara.settingsredirector\n' >> "$FAKE_ACTIVE_PACKAGES"
         printf 'Success\n' ;;
     push\ *\ /data/local/tmp/kara-ghostlock-[0-9]*) printf '1 file pushed\n' ;;
+    push\ *\ /data/local/tmp/kara-ghostlock-experimental-[0-9]*) printf '1 file pushed\n' ;;
     shell\ chmod\ 700\ /data/local/tmp/kara-ghostlock-[0-9]*) : ;;
-    shell\ /data/local/tmp/kara-ghostlock-[0-9]*\ --probe) printf 'KARA_V2_PROBE=PASS\n' ;;
+    shell\ chmod\ 700\ /data/local/tmp/kara-ghostlock-experimental-[0-9]*) : ;;
+    shell\ /data/local/tmp/kara-ghostlock-[0-9]*\ --probe)
+        printf 'V2 SAFE PROBE PASS (reclaim and GhostLock were not invoked)\n' >&2 ;;
+    shell\ /data/local/tmp/kara-ghostlock-experimental-[0-9]*\ --probe-newer\ *)
+        requested=${4-}
+        actual=$(cat "$FAKE_BUILD_STATE")
+        [ "$requested" = "$actual" ] || exit 3
+        printf 'KARA_EXPERIMENTAL_NEWER_PROBE=PASS build=%s\n' "$actual" ;;
     shell\ nohup\ /data/local/tmp/kara-ghostlock-[0-9]*\ --live\ RUN-KARA-PS7713-GHOSTLOCK-V2*)
         if [ -n "${FAKE_BUILD_AFTER_LIVE:-}" ]; then printf '%s\n' "$FAKE_BUILD_AFTER_LIVE" > "$FAKE_BUILD_STATE"; fi
+        if [ "${FAKE_EXPLOIT_ROOT_EFFECT:-1}" = 1 ]; then printf '1\n' > "$FAKE_ROOT_STATE"; fi ;;
+    shell\ nohup\ /data/local/tmp/kara-ghostlock-experimental-[0-9]*\ --live-newer\ *)
         if [ "${FAKE_EXPLOIT_ROOT_EFFECT:-1}" = 1 ]; then printf '1\n' > "$FAKE_ROOT_STATE"; fi ;;
     'shell cmd package set-home-activity com.spocky.projengmenu/.ui.home.MainActivity')
         if [ "${FAKE_SET_HOME_EFFECT:-1}" = 1 ]; then
@@ -169,7 +188,12 @@ case "$*" in
                 mv "$FAKE_ACTIVE_PACKAGES.next" "$FAKE_ACTIVE_PACKAGES"
                 helper_path=$(printf '%s\n' "$*" | sed -n 's#^shell \(/data/local/tmp/[^ ]*\) --cmd.*#\1#p')
                 printf 'uid=0(root) gid=0(root) context=u:r:kernel:s0\n'
-                printf 'ROOTED uid=0 euid=0 context=u:r:kernel:s0 enforce=0 build=0035334210436\n'
+                current_build=$(cat "$FAKE_BUILD_STATE")
+                case "$helper_path" in
+                    *kara-ghostlock-experimental-*) mode=' mode=experimental-newer' ;;
+                    *) mode= ;;
+                esac
+                printf 'ROOTED uid=0 euid=0 context=u:r:kernel:s0 enforce=0 build=%s%s\n' "$current_build" "$mode"
                 printf 'DAEMON_EXE=%s\n' "$helper_path" ;;
         esac ;;
     'shell settings get global ota_disable_automatic_update') cat "$FAKE_OTA_STATE" ;;
@@ -232,6 +256,8 @@ run_tool() {
     FAKE_AURORA_APK="$fixture/aurora.apk" \
     FAKE_EXPLOIT_RELEASE_JSON="$fixture/exploit-release.json" \
     FAKE_EXPLOIT_BINARY="$fixture/kara-exploit.arm" \
+    FAKE_EXPERIMENTAL_RELEASE_JSON="$fixture/experimental-release.json" \
+    FAKE_EXPERIMENTAL_BINARY="$fixture/kara-experimental.arm" \
     FAKE_ADB_LOG="$fixture/adb.log" \
     FAKE_BRIDGE_LOG="$fixture/bridge.log" \
     FAKE_HOME_STATE="$fixture/home.state" \
@@ -243,6 +269,7 @@ run_tool() {
     KARA_REMOVE_MANIFEST="$fixture/remove-user0.txt" \
     KARA_PRIVILEGED_MANIFEST="$fixture/remove-privileged.txt" \
     KARA_EXPLOIT_EXPECTED_SHA256="$fixture_exploit_digest" \
+    KARA_EXPERIMENTAL_EXPECTED_SHA256="$fixture_experimental_digest" \
     KARA_ROOT_WAIT_ATTEMPTS=1 \
     KARA_CACHE_DIR="$fixture/cache" KARA_BACKUP_DIR="$fixture/backups" \
     "$tool" "$@"
@@ -257,6 +284,126 @@ test_downloads_and_verifies_kara_exploit() {
         ok 'downloads and verifies the kara exploit'
     else
         not_ok 'downloads and verifies the kara exploit'; printf '%s\n' "$output"
+    fi
+    rm -rf "$fixture"
+}
+
+test_downloads_and_verifies_experimental_exploit() {
+    new_fixture
+    if output=$(run_tool download-experimental 2>&1) &&
+        [ -f "$fixture/cache/kara-ghostlock-experimental-newer.arm" ] &&
+        printf '%s\n' "$output" | grep -F "KARA_EXPERIMENTAL_SHA256=$fixture_experimental_digest" >/dev/null
+    then
+        ok 'downloads and verifies the separate experimental exploit'
+    else
+        not_ok 'downloads and verifies the separate experimental exploit'; printf '%s\n' "$output"
+    fi
+    rm -rf "$fixture"
+}
+
+test_probe_newer_is_safe_and_restores_cec() {
+    new_fixture
+    printf '0035334219999\n' > "$fixture/build.state"
+    if run_tool --newer-build 0035334219999 --yes probe-newer >"$fixture/out" 2>&1 &&
+        grep -F 'EXPERIMENTAL_NEWER_PROBE=PASS build=0035334219999' "$fixture/out" >/dev/null &&
+        grep -F 'UNVALIDATED_NEWER_FIRMWARE=YES' "$fixture/out" >/dev/null &&
+        grep -F -- '--probe-newer 0035334219999' "$fixture/adb.log" >/dev/null &&
+        ! grep -E -- '--live-newer|install -r|set-home-activity|pm uninstall|settings put global ota_' "$fixture/adb.log" >/dev/null &&
+        [ "$(cat "$fixture/cec.state")" = 0 ] &&
+        find "$fixture/backups" -type f -name state.env | grep . >/dev/null
+    then
+        ok 'newer-firmware probe is safe and restores the CEC guard'
+    else
+        not_ok 'newer-firmware probe is safe and restores the CEC guard'; cat "$fixture/out"; cat "$fixture/adb.log"
+    fi
+    rm -rf "$fixture"
+}
+
+test_probe_newer_rejects_nonnewer_or_mismatched_builds() {
+    for requested in 0035334210436 0035334210000 0035334219998 malformed; do
+        new_fixture
+        printf '0035334219999\n' > "$fixture/build.state"
+        if run_tool --newer-build "$requested" --yes probe-newer >"$fixture/out" 2>&1; then
+            result=0
+        else
+            result=$?
+        fi
+        if [ "$result" -ne 0 ] &&
+            ! grep -E 'push |settings put|--probe-newer|--live-newer|install -r|pm uninstall' "$fixture/adb.log" >/dev/null
+        then
+            ok "newer probe rejects unsafe build request $requested"
+        else
+            not_ok "newer probe rejects unsafe build request $requested"; cat "$fixture/out"; cat "$fixture/adb.log"
+        fi
+        rm -rf "$fixture"
+    done
+}
+
+test_probe_newer_rejects_wrong_runtime_before_mutation() {
+    new_fixture
+    printf '0035334219999\n' > "$fixture/build.state"
+    if FAKE_KERNEL=4.14.88 run_tool --newer-build 0035334219999 --yes probe-newer >"$fixture/out" 2>&1; then
+        not_ok 'newer probe rejects wrong runtime before mutation'
+    elif grep -F 'unsupported kernel release' "$fixture/out" >/dev/null &&
+        ! grep -E 'push |settings put|--probe-newer|--live-newer' "$fixture/adb.log" >/dev/null
+    then
+        ok 'newer probe rejects wrong runtime before mutation'
+    else
+        not_ok 'newer probe rejects wrong runtime before mutation'; cat "$fixture/out"; cat "$fixture/adb.log"
+    fi
+    rm -rf "$fixture"
+}
+
+test_newer_live_requires_watchdog_acceptance() {
+    new_fixture
+    printf '0035334219999\n' > "$fixture/build.state"
+    if run_tool --newer-build 0035334219999 --yes test-newer >"$fixture/out" 2>&1; then
+        not_ok 'newer live test requires watchdog reboot acceptance'
+    elif grep -F 'test-newer requires --accept-watchdog-reboot' "$fixture/out" >/dev/null &&
+        ! grep -E 'push |settings put|--probe-newer|--live-newer' "$fixture/adb.log" >/dev/null
+    then
+        ok 'newer live test requires watchdog reboot acceptance'
+    else
+        not_ok 'newer live test requires watchdog reboot acceptance'; cat "$fixture/out"; cat "$fixture/adb.log"
+    fi
+    rm -rf "$fixture"
+}
+
+test_newer_live_only_attempts_root_and_restores_cec() {
+    new_fixture
+    printf '0035334219999\n' > "$fixture/build.state"
+    if run_tool --newer-build 0035334219999 --accept-watchdog-reboot --yes test-newer >"$fixture/out" 2>&1; then
+        probe_line=$(grep -n -- '--probe-newer 0035334219999' "$fixture/adb.log" | head -n 1 | cut -d: -f1)
+        live_line=$(grep -n -- '--live-newer 0035334219999 RUN-KARA-EXPERIMENTAL-NEWER-I-ACCEPT-WATCHDOG-REBOOT' "$fixture/adb.log" | head -n 1 | cut -d: -f1)
+        root_line=$(grep -n -- '--cmd' "$fixture/adb.log" | tail -n 1 | cut -d: -f1)
+        if [ -n "$probe_line" ] && [ "$probe_line" -lt "$live_line" ] && [ "$live_line" -lt "$root_line" ] &&
+            grep -F 'EXPERIMENTAL_NEWER_ROOT=PASS build=0035334219999' "$fixture/out" >/dev/null &&
+            ! grep -E 'install -r|set-home-activity|pm uninstall|settings put global ota_' "$fixture/adb.log" >/dev/null &&
+            [ "$(cat "$fixture/cec.state")" = 0 ]
+        then
+            ok 'newer live test only attempts root and restores the CEC guard'
+        else
+            not_ok 'newer live test only attempts root and restores the CEC guard'; cat "$fixture/out"; cat "$fixture/adb.log"
+        fi
+    else
+        not_ok 'newer live test only attempts root and restores the CEC guard'; cat "$fixture/out"; cat "$fixture/adb.log"
+    fi
+    rm -rf "$fixture"
+}
+
+test_newer_root_failure_rolls_back_without_unrelated_mutation() {
+    new_fixture
+    printf '0035334219999\n' > "$fixture/build.state"
+    if FAKE_EXPLOIT_ROOT_EFFECT=0 run_tool --newer-build 0035334219999 --accept-watchdog-reboot --yes test-newer >"$fixture/out" 2>&1; then
+        not_ok 'newer root failure rolls back safely'
+    elif grep -F 'experimental newer-firmware root was not obtained' "$fixture/out" >/dev/null &&
+        grep -F 'AUTOMATIC_ROLLBACK=PASS' "$fixture/out" >/dev/null &&
+        ! grep -E 'install -r|pm uninstall|settings put global ota_' "$fixture/adb.log" >/dev/null &&
+        [ "$(cat "$fixture/cec.state")" = 0 ]
+    then
+        ok 'newer root failure rolls back without unrelated mutation'
+    else
+        not_ok 'newer root failure rolls back safely'; cat "$fixture/out"; cat "$fixture/adb.log"
     fi
     rm -rf "$fixture"
 }
@@ -585,7 +732,8 @@ test_readme_documents_the_complete_workflow() {
     missing=0
     for phrase in 'Exact supported device' 'The exploit can reboot the Stick' \
         'Wi-Fi ADB quick start' 'USB through a Linux host' 'Root is temporary' \
-        'Restore the backup' 'Complete exploit source'; do
+        'Restore the backup' 'Complete exploit source' \
+        'Carefully test a newer firmware' 'probe-newer' 'test-newer'; do
         grep -F "$phrase" "$repo/README.md" >/dev/null || missing=1
     done
     if [ "$missing" -eq 0 ]; then
@@ -598,12 +746,19 @@ test_readme_documents_the_complete_workflow() {
 test_downloads_and_verifies_official_projectivy
 test_downloads_and_verifies_official_aurora
 test_downloads_and_verifies_kara_exploit
+test_downloads_and_verifies_experimental_exploit
 test_rejects_untrusted_kara_exploit_url
 test_rejects_wrong_kara_exploit_asset_name
 test_rejects_missing_kara_exploit_digest
 test_rejects_unpinned_kara_exploit_digest
 test_rejects_duplicate_kara_exploit_asset
 test_apply_obtains_temporary_root_before_mutation
+test_probe_newer_is_safe_and_restores_cec
+test_probe_newer_rejects_nonnewer_or_mismatched_builds
+test_probe_newer_rejects_wrong_runtime_before_mutation
+test_newer_live_requires_watchdog_acceptance
+test_newer_live_only_attempts_root_and_restores_cec
+test_newer_root_failure_rolls_back_without_unrelated_mutation
 test_refuses_wrong_kernel_before_exploit_or_mutation
 test_refuses_incompatible_exploit_runtime_before_mutation
 test_stops_if_firmware_changes_during_exploit
