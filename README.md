@@ -15,7 +15,7 @@ persistent root.
 
 ## Live device screenshot
 
-![Projectivy This device details for the live kara AFTKA target](docs/images/projectivy-kara-live-2026-09-11.png)
+![Projectivy This device details for the live kara AFTKA target](docs/images/projectivy-kara-this-device-2026-09-11.png)
 
 Captured after opening Projectivy System → About → **This device** on the
 supported physical `kara/AFTKA` target on 2026-09-11. The exact identity audit,

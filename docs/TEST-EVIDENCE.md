@@ -65,7 +65,7 @@ change, HOME change, OTA change, reboot, partition write, or hardware short was
 performed during this validation pass.
 
 The live screenshot published at
-[`docs/images/projectivy-kara-live-2026-09-11.png`](images/projectivy-kara-live-2026-09-11.png)
+[`docs/images/projectivy-kara-this-device-2026-09-11.png`](images/projectivy-kara-this-device-2026-09-11.png)
 is an unedited 1920x1080 ADB framebuffer capture taken after opening
 Projectivy System → About → **This device**. It visibly reports `kara`, `AFTKA`,
 `mt8696`, and `PS7713.5443N`. The fingerprint displayed by this screen embeds
