@@ -26,6 +26,48 @@ Every value below must match. Mutating commands stop on any mismatch.
 This is not compatible with `mantis/AFTMM`, `mantra/AFTKM`, or
 `karat/AFTKRT`, even though their names or hardware may look similar.
 
+The normal `apply`, `backup`, and `verify` commands remain locked to the exact
+build above. They never treat a newer firmware as proven compatible.
+
+## Carefully test a newer firmware
+
+Newer builds can be tested without weakening `apply`. First run `audit` and
+copy the exact 13-digit `BUILD` value. The experimental path still requires
+`kara/AFTKA`, API 28, kernel `4.14.87+`, ARM32 `armv7l`, four CPUs, uid 2000,
+and enforcing SELinux. Only the build number may differ, and it must be
+strictly newer than `0035334210436`.
+
+Start with the safe probe. It authenticates the separate experimental release,
+backs up state, temporarily enables the CEC reboot guard, and runs only the
+exploit's non-live compatibility checks:
+
+```sh
+./scripts/kara-tool.sh \
+  --serial FIRE_TV_IP:5555 \
+  --newer-build YOUR_13_DIGIT_BUILD \
+  --yes probe-newer
+```
+
+Success prints `EXPERIMENTAL_NEWER_PROBE=PASS`. This does not attempt root,
+install apps, switch HOME, remove packages, or change OTA policy.
+
+Only after that passes, make one live attempt:
+
+```sh
+./scripts/kara-tool.sh \
+  --serial FIRE_TV_IP:5555 \
+  --newer-build YOUR_13_DIGIT_BUILD \
+  --accept-watchdog-reboot \
+  --yes test-newer
+```
+
+This command runs the safe probe first and then starts live mode exactly once.
+It can hang, disconnect ADB, or watchdog-reboot the Stick. On success it proves
+temporary uid 0 and prints `EXPERIMENTAL_NEWER_ROOT=PASS`; it deliberately does
+not install, debloat, switch launchers, or touch OTA state. Reboot afterward to
+remove temporary root. A successful result is evidence only for that exact
+build and does not make normal `apply` accept it.
+
 ## Read this before `apply`
 
 **The exploit can reboot the Stick.** It uses a live kernel race. A failed
@@ -172,6 +214,16 @@ and SHA-256:
 a42185d743ee1d4c9c46c1e35f5fa0a40f5e9a7f81450308c3eab297677847d5
 ```
 
+The isolated, unvalidated newer-build source is on the
+[`feat/experimental-newer-firmware` branch](https://github.com/Delitants/GhostLock/tree/feat/experimental-newer-firmware/kara).
+The controller authenticates its separate
+[`kara-experimental-newer-v1` release](https://github.com/Delitants/GhostLock/releases/tag/kara-experimental-newer-v1)
+and pinned SHA-256:
+
+```text
+d0978d3fcc938150cdc8992243b7a70eedc285ac833ff7a20e99e7b49610a8be
+```
+
 ## Application supply-chain checks
 
 Projectivy is downloaded from the developer's
@@ -200,6 +252,9 @@ audit                  Read-only identity and launcher inventory
 download-projectivy    Authenticate and cache Projectivy
 download-aurora        Authenticate and cache Aurora Store
 download-exploit       Authenticate and cache the exact kara exploit
+download-experimental  Authenticate and cache the unvalidated newer-build exploit
+probe-newer            Run only safe compatibility checks on an exact newer build
+test-newer             Make one acknowledged live root attempt on that build
 backup                 Save restorable user-0 state
 apply                  Run the complete backed-up workflow
 verify                 Verify the durable configuration
