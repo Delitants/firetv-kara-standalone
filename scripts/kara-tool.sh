@@ -16,6 +16,7 @@ SUPPORTED_KERNEL=4.14.87+
 SUPPORTED_MACHINE=armv7l
 SUPPORTED_ABI=armeabi-v7a
 SUPPORTED_CPUS=4
+SUPPORTED_CPU_ONLINE=0-3
 KARA_EXPLOIT_REPO=Delitants/GhostLock
 KARA_EXPLOIT_TAG=kara-PS7713-5443-v1
 KARA_EXPLOIT_ASSET=kara-ghostlock-PS7713-5443.arm
@@ -246,7 +247,12 @@ exploit_runtime_values() {
     actual_kernel=$(device uname -r)
     actual_machine=$(device uname -m)
     actual_abi=$(device getprop ro.product.cpu.abi)
-    actual_cpus=$(device getconf _NPROCESSORS_ONLN)
+    actual_cpu_online=$(device cat /sys/devices/system/cpu/online)
+    if [ "$actual_cpu_online" = "$SUPPORTED_CPU_ONLINE" ]; then
+        actual_cpus=$SUPPORTED_CPUS
+    else
+        actual_cpus="online:$actual_cpu_online"
+    fi
     actual_uid=$(device id -u)
     actual_selinux=$(device getenforce)
 }

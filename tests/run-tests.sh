@@ -128,7 +128,8 @@ case "$*" in
     'shell getprop ro.product.cpu.abi') printf '%s\n' "${FAKE_ABI:-armeabi-v7a}" ;;
     'shell uname -m') printf '%s\n' "${FAKE_MACHINE:-armv7l}" ;;
     'shell uname -r') printf '%s\n' "${FAKE_KERNEL:-4.14.87+}" ;;
-    'shell getconf _NPROCESSORS_ONLN') printf '%s\n' "${FAKE_CPUS:-4}" ;;
+    'shell getconf _NPROCESSORS_ONLN') printf 'getconf: not found\n' >&2; exit 127 ;;
+    'shell cat /sys/devices/system/cpu/online') printf '%s\n' "${FAKE_CPU_ONLINE:-0-3}" ;;
     'shell id -u') printf '%s\n' "${FAKE_UID:-2000}" ;;
     'shell getenforce') printf '%s\n' "${FAKE_SELINUX:-Enforcing}" ;;
     'shell cat /proc/sys/kernel/random/boot_id') printf '11111111-2222-3333-4444-555555555555\n' ;;
@@ -534,7 +535,7 @@ test_refuses_incompatible_exploit_runtime_before_mutation() {
         new_fixture
         case "$runtime_case" in
             abi) FAKE_ABI=arm64-v8a run_tool --yes apply >"$fixture/out" 2>&1 && result=0 || result=$? ;;
-            cpus) FAKE_CPUS=8 run_tool --yes apply >"$fixture/out" 2>&1 && result=0 || result=$? ;;
+            cpus) FAKE_CPU_ONLINE=0-7 run_tool --yes apply >"$fixture/out" 2>&1 && result=0 || result=$? ;;
             uid) FAKE_UID=0 run_tool --yes apply >"$fixture/out" 2>&1 && result=0 || result=$? ;;
             selinux) FAKE_SELINUX=Permissive run_tool --yes apply >"$fixture/out" 2>&1 && result=0 || result=$? ;;
         esac
