@@ -7,7 +7,20 @@ Store, installs the included Kara Settings repair, switches HOME, and removes
 the reviewed non-core Amazon packages for Android user 0.
 
 It does not unlock the bootloader, flash a ROM, write a partition, or install
-persistent root. No hardware short is required for the supported build.
+persistent root.
+
+> **NO HARDWARE SHORTING NEEDED.** The supported build is handled entirely
+> through authorized ADB and the published software exploit. Do not open the
+> Stick, bridge test points, or short eMMC pins for this procedure.
+
+## Live device screenshot
+
+![Projectivy System About screen running on the live kara device](docs/images/projectivy-kara-live-2026-09-11.png)
+
+Captured from the supported physical `kara/AFTKA` target on 2026-09-11 after
+the exact identity audit, authenticated non-live exploit probe, and durable
+configuration verification passed. See [`docs/TEST-EVIDENCE.md`](docs/TEST-EVIDENCE.md)
+for the precise boundary of what was tested.
 
 ## Exact supported device
 
