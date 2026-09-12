@@ -66,9 +66,12 @@ performed during this validation pass.
 
 The live screenshot published at
 [`docs/images/projectivy-kara-live-2026-09-11.png`](images/projectivy-kara-live-2026-09-11.png)
-is an unedited 1920x1080 ADB framebuffer capture of Projectivy's System/About
-screen. Its SHA-256 is
-`d3ca6bd5210eb9bb69e0c06a0f04d70ddbad6ac48af93acb8950bf467b9cdac1`.
+is an unedited 1920x1080 ADB framebuffer capture taken after opening
+Projectivy System → About → **This device**. It visibly reports `kara`, `AFTKA`,
+`mt8696`, and `PS7713.5443N`. The fingerprint displayed by this screen embeds
+`0035334210304`; the independently queried `ro.build.version.incremental` used
+by the controller's compatibility gate is `0035334210436`. Its SHA-256 is
+`9ecdf497fe9dd458b4e4c8ff46332a72930dfdbad929420b10db08f5847e7895`.
 
 ## Evidence boundary
 

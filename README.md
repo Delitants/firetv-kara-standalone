@@ -15,12 +15,13 @@ persistent root.
 
 ## Live device screenshot
 
-![Projectivy System About screen running on the live kara device](docs/images/projectivy-kara-live-2026-09-11.png)
+![Projectivy This device details for the live kara AFTKA target](docs/images/projectivy-kara-live-2026-09-11.png)
 
-Captured from the supported physical `kara/AFTKA` target on 2026-09-11 after
-the exact identity audit, authenticated non-live exploit probe, and durable
-configuration verification passed. See [`docs/TEST-EVIDENCE.md`](docs/TEST-EVIDENCE.md)
-for the precise boundary of what was tested.
+Captured after opening Projectivy System → About → **This device** on the
+supported physical `kara/AFTKA` target on 2026-09-11. The exact identity audit,
+authenticated non-live exploit probe, and durable configuration verification
+passed. See [`docs/TEST-EVIDENCE.md`](docs/TEST-EVIDENCE.md) for the precise
+boundary of what was tested and the fingerprint/build-number clarification.
 
 ## Exact supported device
 
