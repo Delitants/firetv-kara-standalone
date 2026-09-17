@@ -98,16 +98,23 @@ EOF
 
     cat > "$fixture/bin/apksigner" <<'EOF'
 #!/bin/sh
+if [ "${FAKE_APKSIGNER_FORMAT:-legacy}" = build-tools-37 ]; then
+    cat >&2 <<'OUT'
+WARNING: A restricted method in java.lang.System has been called
+WARNING: java.lang.System::loadLibrary has been called by org.conscrypt.NativeLibraryUtil in an unnamed module
+OUT
+    signer_prefix='V2 Signer:'
+else
+    signer_prefix='Signer #1'
+fi
 case "$*" in
-*aurora.apk.part) cat <<'OUT'
-Signer #1 certificate DN: CN=Rahul Patel, C=IN
-Signer #1 certificate SHA-256 digest: 4c626157ad02bda3401a7263555f68a79663fc3e13a4d4369a12570941aa280f
-OUT
+*aurora.apk.part)
+    printf '%s certificate DN: CN=Rahul Patel, C=IN\n' "$signer_prefix"
+    printf '%s certificate SHA-256 digest: 4c626157ad02bda3401a7263555f68a79663fc3e13a4d4369a12570941aa280f\n' "$signer_prefix"
 ;;
-*) cat <<'OUT'
-Signer #1 certificate DN: CN=Despesse Mickael, L=Villeurbanne, C=FR
-Signer #1 certificate SHA-256 digest: f6697bf4082ee97511e4de07863193884a015b7ab5860430321bda1042b0aadd
-OUT
+*)
+    printf '%s certificate DN: CN=Despesse Mickael, L=Villeurbanne, C=FR\n' "$signer_prefix"
+    printf '%s certificate SHA-256 digest: f6697bf4082ee97511e4de07863193884a015b7ab5860430321bda1042b0aadd\n' "$signer_prefix"
 ;;
 esac
 EOF
@@ -844,6 +851,23 @@ test_downloads_and_verifies_official_projectivy() {
     rm -rf "$fixture"
 }
 
+test_accepts_build_tools_37_signer_output() {
+    new_fixture
+    if projectivy_output=$(FAKE_APKSIGNER_FORMAT=build-tools-37 run_tool download-projectivy 2>&1) &&
+        aurora_output=$(FAKE_APKSIGNER_FORMAT=build-tools-37 run_tool download-aurora 2>&1) &&
+        [ -f "$fixture/cache/ProjectivyLauncher-4.71-c95-xda-release.apk" ] &&
+        [ -f "$fixture/cache/AuroraStore-4.8.4.apk" ] &&
+        printf '%s\n' "$projectivy_output" | grep -F "PROJECTIVY_SHA256=$fixture_digest" >/dev/null &&
+        printf '%s\n' "$aurora_output" | grep -F 'AURORA_VERSION=4.8.4' >/dev/null
+    then
+        ok 'accepts Build Tools 37 signer output'
+    else
+        not_ok 'accepts Build Tools 37 signer output'
+        printf '%s\n' "${projectivy_output-}" "${aurora_output-}"
+    fi
+    rm -rf "$fixture"
+}
+
 test_rejects_nonofficial_projectivy_url() {
     FAKE_RELEASE_URL=https://evil.invalid/Projectivy.apk new_fixture
     if run_tool download-projectivy >"$fixture/out" 2>&1; then
@@ -938,6 +962,7 @@ test_refuses_incompatible_exploit_runtime_before_mutation
 test_stops_if_firmware_changes_during_exploit
 test_root_failure_aborts_before_package_mutation_and_rolls_back_cec
 test_ssh_bridge_stages_every_local_payload
+test_accepts_build_tools_37_signer_output
 test_rejects_nonofficial_projectivy_url
 test_refuses_wrong_model_before_mutation
 test_requires_confirmation_before_mutation

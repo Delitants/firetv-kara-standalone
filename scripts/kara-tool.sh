@@ -53,6 +53,22 @@ bridge_temp=
 
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || fail "$1 is required"; }
+apk_certificate_sha256() {
+    digests=$(printf '%s\n' "$1" | awk '
+        /^Signer #[0-9]+ certificate SHA-256 digest: / ||
+        /^V[0-9]+ Signer: certificate SHA-256 digest: / {
+            digest = $NF
+            sub(/\r$/, "", digest)
+            print tolower(digest)
+        }
+    ' | sort -u)
+    digest_count=$(printf '%s\n' "$digests" | awk 'NF { count++ } END { print count + 0 }')
+    [ "$digest_count" -eq 1 ] || return 1
+    digest=$(printf '%s\n' "$digests" | awk 'NF { print; exit }')
+    case "$digest" in ''|*[!0-9a-f]*) return 1 ;; esac
+    [ "${#digest}" -eq 64 ] || return 1
+    printf '%s\n' "$digest"
+}
 expand_home_tool_path() {
     tool_path=$1
     case "$tool_path" in
@@ -353,8 +369,8 @@ PY
     [ "$min_sdk" -le "$SUPPORTED_API" ] || fail 'latest Projectivy is incompatible with Android 9'
 
     certs=$("$APKSIGNER" verify --print-certs "$temp_dir/projectivy.apk.part") || fail 'Projectivy APK signature verification failed'
-    cert_digest=$(printf '%s\n' "$certs" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1)
-    [ "$cert_digest" = "$PROJECTIVY_CERT_SHA256" ] || fail 'Projectivy signing certificate mismatch'
+    cert_digest=$(apk_certificate_sha256 "$certs") || fail 'Projectivy signing certificate digest is missing or ambiguous'
+    [ "$cert_digest" = "$PROJECTIVY_CERT_SHA256" ] || fail "Projectivy signing certificate mismatch: $cert_digest"
     final_apk="$cache_dir/$asset_name"
     mv "$temp_dir/projectivy.apk.part" "$final_apk"
     printf 'PROJECTIVY_VERSION=%s\n' "$tag"
@@ -488,8 +504,8 @@ PY
     [ "$min_sdk" -le "$SUPPORTED_API" ] || fail 'latest Aurora Store is incompatible with Android 9'
 
     certs=$("$APKSIGNER" verify --print-certs "$temp_dir/aurora.apk.part") || fail 'Aurora Store APK signature verification failed'
-    cert_digest=$(printf '%s\n' "$certs" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1)
-    [ "$cert_digest" = "$AURORA_CERT_SHA256" ] || fail 'Aurora Store signing certificate mismatch'
+    cert_digest=$(apk_certificate_sha256 "$certs") || fail 'Aurora Store signing certificate digest is missing or ambiguous'
+    [ "$cert_digest" = "$AURORA_CERT_SHA256" ] || fail "Aurora Store signing certificate mismatch: $cert_digest"
     final_apk="$cache_dir/$asset_name"
     mv "$temp_dir/aurora.apk.part" "$final_apk"
     printf 'AURORA_VERSION=%s\n' "$tag"
