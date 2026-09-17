@@ -179,11 +179,16 @@ case "$*" in
         mv "$FAKE_ACTIVE_PACKAGES.next" "$FAKE_ACTIVE_PACKAGES"
         printf 'Success\n' ;;
     shell\ /data/local/tmp/*\ --cmd\ *)
+        if [ "$#" -ne 2 ]; then
+            printf 'root helper command was not quoted as one remote shell argument\n' >&2
+            exit 64
+        fi
         case "$*" in *kara-root-helper*) root_ready=1 ;; *) root_ready=$(cat "$FAKE_ROOT_STATE") ;; esac
         if [ "$root_ready" != 1 ]; then
             printf 'connect kara root socket: No such file or directory\n' >&2
             exit 2
         fi
+        helper_path=$(printf '%s\n' "$*" | sed -n 's#^shell \(/data/local/tmp/[^ ]*\) --cmd.*#\1#p')
         case "$*" in
             *'EMPTY_OTA_COLLISION_CLEARED'*)
                 live_state=$(cat "$FAKE_OTA_LIVE_PATH_STATE")
@@ -194,23 +199,29 @@ case "$*" in
                 elif [ "$live_state" = nonempty ]; then
                     printf 'NONEMPTY_OTA_LIVE_PATH\n'
                 fi ;;
-            *'/data/ota_package /cache/recovery/command /cache/recovery/block.map'*)
+            *'PRESENT:/data/ota_package'*)
                 [ "$(cat "$FAKE_OTA_LIVE_PATH_STATE")" = missing ] ||
                     printf 'PRESENT:/data/ota_package\n' ;;
             *'runcon u:r:shell:s0 /system/bin/pm uninstall -k --user 0 com.amazon.vizzini'*)
                 grep -Fvx 'package:com.amazon.vizzini' "$FAKE_ACTIVE_PACKAGES" > "$FAKE_ACTIVE_PACKAGES.next" || true
                 mv "$FAKE_ACTIVE_PACKAGES.next" "$FAKE_ACTIVE_PACKAGES"
                 ;;
-            *)
-                helper_path=$(printf '%s\n' "$*" | sed -n 's#^shell \(/data/local/tmp/[^ ]*\) --cmd.*#\1#p')
-                printf 'uid=0(root) gid=0(root) context=u:r:kernel:s0\n'
+            *'id; cat /data/local/tmp/kara-root-ready'*)
+                printf '%s\n' "${FAKE_ROOT_ID_LINE:-uid=0(root) gid=0(root) context=u:r:kernel:s0}"
                 current_build=$(cat "$FAKE_BUILD_STATE")
                 case "$helper_path" in
                     *kara-ghostlock-experimental-*) mode=' mode=experimental-newer' ;;
                     *) mode= ;;
                 esac
-                printf 'ROOTED uid=0 euid=0 context=u:r:kernel:s0 enforce=0 build=%s%s\n' "$current_build" "$mode"
+                printf 'ROOTED uid=0 euid=0 context=u:r:kernel:s0 enforce=0 build=%s%s\n' "$current_build" "$mode" ;;
+            *'/proc/\$PPID/exe'*'DAEMON_EXE='*)
+                daemon_path=${FAKE_DAEMON_PATH:-$helper_path}
+                [ "$daemon_path" = "$helper_path" ] && printf 'DAEMON_EXE=%s\n' "$daemon_path" ;;
+            *'DAEMON_EXE='*)
+                # A scan of every process sees the waiting client itself and
+                # cannot distinguish it from the socket-owning daemon.
                 printf 'DAEMON_EXE=%s\n' "$helper_path" ;;
+            *) printf 'unexpected root helper command\n' >&2; exit 65 ;;
         esac ;;
     'shell settings get global ota_disable_automatic_update') cat "$FAKE_OTA_STATE" ;;
     'shell settings put global ota_disable_automatic_update 1') printf '1\n' > "$FAKE_OTA_STATE" ;;
@@ -521,6 +532,39 @@ test_resumes_verified_root_helper_while_selinux_is_permissive() {
         ok 'resumes a verified root helper while SELinux is permissive'
     else
         not_ok 'resumes a verified root helper while SELinux is permissive'; cat "$fixture/out"; cat "$fixture/adb.log"
+    fi
+    rm -rf "$fixture"
+}
+
+test_rejects_root_helper_that_is_not_daemon_parent() {
+    new_fixture
+    if FAKE_SELINUX=Permissive FAKE_DAEMON_PATH=/data/local/tmp/kara-ghostlock-other run_tool \
+        --root-helper /data/local/tmp/kara-root-helper --yes apply >"$fixture/out" 2>&1
+    then
+        not_ok 'rejects a root helper that is not the daemon parent'
+    elif grep -F 'supplied root helper did not prove temporary uid 0' "$fixture/out" >/dev/null &&
+        ! grep -E -- '--live|BACKUP_DIR=|install -r|pm uninstall|set-home-activity|settings put' "$fixture/out" "$fixture/adb.log" >/dev/null
+    then
+        ok 'rejects a root helper that is not the daemon parent'
+    else
+        not_ok 'rejects a root helper that is not the daemon parent'; cat "$fixture/out"; cat "$fixture/adb.log"
+    fi
+    rm -rf "$fixture"
+}
+
+test_rejects_euid_only_root_helper_proof() {
+    new_fixture
+    if FAKE_SELINUX=Permissive \
+        FAKE_ROOT_ID_LINE='uid=2000(shell) gid=2000(shell) euid=0(root)' \
+        run_tool --root-helper /data/local/tmp/kara-root-helper --yes apply >"$fixture/out" 2>&1
+    then
+        not_ok 'rejects euid-only root helper proof'
+    elif grep -F 'supplied root helper did not prove temporary uid 0' "$fixture/out" >/dev/null &&
+        ! grep -E -- '--live|BACKUP_DIR=|install -r|pm uninstall|set-home-activity|settings put' "$fixture/out" "$fixture/adb.log" >/dev/null
+    then
+        ok 'rejects euid-only root helper proof'
+    else
+        not_ok 'rejects euid-only root helper proof'; cat "$fixture/out"; cat "$fixture/adb.log"
     fi
     rm -rf "$fixture"
 }
@@ -862,6 +906,8 @@ test_fails_when_aurora_install_has_no_package_effect
 test_fails_when_requested_package_remains_active
 test_uses_explicit_root_helper_for_protected_package
 test_resumes_verified_root_helper_while_selinux_is_permissive
+test_rejects_root_helper_that_is_not_daemon_parent
+test_rejects_euid_only_root_helper_proof
 test_clears_only_empty_live_ota_collision
 test_refuses_nonempty_live_ota_collision
 test_refuses_nonempty_live_ota_collision_after_new_root

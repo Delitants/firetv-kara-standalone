@@ -538,17 +538,19 @@ verify_root_helper() {
     expected_build=${1:-$SUPPORTED_BUILD}
     expected_mode=${2:-}
     printf '%s\n' "$root_helper" | grep -Eq '^/data/local/tmp/[A-Za-z0-9._-]+$' || fail 'unsafe root-helper path'
-    # The single-quoted variables expand on the device, not in this shell.
-    # shellcheck disable=SC2016
-    root_command='id; cat /data/local/tmp/kara-root-ready; for p in /proc/[0-9]*; do e=$(readlink "$p/exe" 2>/dev/null); if [ "$e" = '"$root_helper"' ]; then echo "DAEMON_EXE=$e"; exit 0; fi; done; exit 1'
-    root_proof=$(device "$root_helper" --cmd "$root_command" 2>/dev/null) || return 1
-    printf '%s\n' "$root_proof" | grep -F 'uid=0(root)' >/dev/null || return 1
+    # Pass each client invocation as one quoted remote-shell argument. Older
+    # adb clients otherwise split at semicolons and run the tail as uid 2000.
+    root_command='id; cat /data/local/tmp/kara-root-ready'
+    root_proof=$(device "$root_helper --cmd \"$root_command\"" 2>/dev/null) || return 1
+    printf '%s\n' "$root_proof" | grep -E '(^| )uid=0\(root\)( |$)' >/dev/null || return 1
     printf '%s\n' "$root_proof" | grep -F 'ROOTED uid=0 euid=0' >/dev/null || return 1
-    printf '%s\n' "$root_proof" | grep -F "build=$expected_build" >/dev/null || return 1
+    printf '%s\n' "$root_proof" | grep -E "(^| )build=$expected_build( |$)" >/dev/null || return 1
     if [ -n "$expected_mode" ]; then
-        printf '%s\n' "$root_proof" | grep -F "mode=$expected_mode" >/dev/null || return 1
+        printf '%s\n' "$root_proof" | grep -E "(^| )mode=$expected_mode( |$)" >/dev/null || return 1
     fi
-    printf '%s\n' "$root_proof" | grep -Fx "DAEMON_EXE=$root_helper" >/dev/null || return 1
+    daemon_command="readlink /proc/\\\$PPID/exe 2>/dev/null | grep -Fx $root_helper >/dev/null && echo DAEMON_EXE=$root_helper"
+    daemon_proof=$(device "$root_helper --cmd \"$daemon_command\"" 2>/dev/null) || return 1
+    printf '%s\n' "$daemon_proof" | grep -Fx "DAEMON_EXE=$root_helper" >/dev/null || return 1
 }
 
 root_helper_runtime_gate() {
@@ -584,9 +586,8 @@ clear_empty_ota_collision() {
 }
 
 verify_staged_ota_absent() {
-    # shellcheck disable=SC2016
-    ota_check='for p in /data/ota_package /cache/recovery/command /cache/recovery/block.map; do [ ! -e "$p" ] || echo "PRESENT:$p"; done'
-    ota_present=$(device "$root_helper" --cmd "$ota_check") || fail 'could not verify staged OTA paths'
+    ota_check='[ ! -e /data/ota_package ] || echo PRESENT:/data/ota_package; [ ! -e /cache/recovery/command ] || echo PRESENT:/cache/recovery/command; [ ! -e /cache/recovery/block.map ] || echo PRESENT:/cache/recovery/block.map'
+    ota_present=$(device "$root_helper --cmd \"$ota_check\"") || fail 'could not verify staged OTA paths'
     [ -z "$ota_present" ] || fail "staged OTA path remains: $ota_present"
     printf 'STAGED_OTA_PATHS=ABSENT\n'
 }
