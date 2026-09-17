@@ -11,7 +11,7 @@ not_ok() { printf 'not ok - %s\n' "$1"; fail=$((fail + 1)); }
 
 new_fixture() {
     fixture=$(mktemp -d "${TMPDIR:-/tmp}/kara-public-test.XXXXXX")
-    mkdir -p "$fixture/bin" "$fixture/cache" "$fixture/backups"
+    mkdir -p "$fixture/bin" "$fixture/cache"
     printf 'fixture official Projectivy APK\n' > "$fixture/projectivy.apk"
     printf 'fixture official Aurora Store APK\n' > "$fixture/aurora.apk"
     printf 'fixture kara exploit ELF\n' > "$fixture/kara-exploit.arm"
@@ -274,9 +274,9 @@ EOF
 }
 
 run_tool() {
-    PATH="$fixture/bin:$PATH" \
-    CURL="$fixture/bin/curl" AAPT="$fixture/bin/aapt" \
-    APKSIGNER="$fixture/bin/apksigner" ADB="$fixture/bin/adb" \
+    HOME="${TEST_HOME:-$HOME}" PATH="$fixture/bin:$PATH" \
+    CURL="${TEST_CURL:-$fixture/bin/curl}" AAPT="${TEST_AAPT:-$fixture/bin/aapt}" \
+    APKSIGNER="${TEST_APKSIGNER:-$fixture/bin/apksigner}" ADB="${TEST_ADB:-$fixture/bin/adb}" \
     FAKE_RELEASE_JSON="$fixture/release.json" \
     FAKE_PROJECTIVY_APK="$fixture/projectivy.apk" \
     FAKE_AURORA_RELEASE_JSON="$fixture/aurora-release.json" \
@@ -302,6 +302,47 @@ run_tool() {
     KARA_ROOT_WAIT_ATTEMPTS=1 \
     KARA_CACHE_DIR="$fixture/cache" KARA_BACKUP_DIR="$fixture/backups" \
     "$tool" "$@"
+}
+
+test_expands_home_relative_build_tool_paths() {
+    new_fixture
+    mkdir -p "$fixture/home/tools"
+    cp "$fixture/bin/adb" "$fixture/home/tools/adb"
+    cp "$fixture/bin/curl" "$fixture/home/tools/curl"
+    cp "$fixture/bin/aapt" "$fixture/home/tools/aapt"
+    cp "$fixture/bin/apksigner" "$fixture/home/tools/apksigner"
+    if output=$(TEST_HOME="$fixture/home" TEST_ADB='~/tools/adb' \
+        TEST_CURL='~/tools/curl' TEST_AAPT='~/tools/aapt' \
+        TEST_APKSIGNER='~/tools/apksigner' run_tool download-projectivy 2>&1) &&
+        audit=$(TEST_HOME="$fixture/home" TEST_ADB='~/tools/adb' \
+        TEST_CURL='~/tools/curl' TEST_AAPT='~/tools/aapt' \
+        TEST_APKSIGNER='~/tools/apksigner' run_tool audit 2>&1) &&
+        printf '%s\n' "$output" | grep -F 'PROJECTIVY_VERSION=4.71' >/dev/null &&
+        printf '%s\n' "$audit" | grep -F 'SUPPORTED_EXPLOIT_TARGET=YES' >/dev/null
+    then
+        ok 'expands leading home shorthand in build-tool paths'
+    else
+        not_ok 'expands leading home shorthand in build-tool paths'; printf '%s\n' "$output"
+    fi
+    rm -rf "$fixture"
+}
+
+test_apply_preflights_build_tools_before_device_or_root() {
+    new_fixture
+    missing_aapt="$fixture/missing-aapt"
+    if TEST_AAPT="$missing_aapt" run_tool --yes apply >"$fixture/out" 2>&1
+    then
+        not_ok 'apply preflights build tools before device or root'
+    elif grep -F "FAIL: $missing_aapt is required" "$fixture/out" >/dev/null &&
+        ! grep -F 'BACKUP_DIR=' "$fixture/out" >/dev/null &&
+        [ ! -s "$fixture/adb.log" ] &&
+        [ ! -e "$fixture/backups" ]
+    then
+        ok 'apply preflights build tools before device or root'
+    else
+        not_ok 'apply preflights build tools before device or root'; cat "$fixture/out"; cat "$fixture/adb.log"
+    fi
+    rm -rf "$fixture"
 }
 
 test_downloads_and_verifies_kara_exploit() {
@@ -876,6 +917,8 @@ test_readme_documents_the_complete_workflow() {
 
 test_downloads_and_verifies_official_projectivy
 test_downloads_and_verifies_official_aurora
+test_expands_home_relative_build_tool_paths
+test_apply_preflights_build_tools_before_device_or_root
 test_downloads_and_verifies_kara_exploit
 test_downloads_and_verifies_experimental_exploit
 test_rejects_untrusted_kara_exploit_url

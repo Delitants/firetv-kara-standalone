@@ -53,6 +53,37 @@ bridge_temp=
 
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || fail "$1 is required"; }
+expand_home_tool_path() {
+    tool_path=$1
+    case "$tool_path" in
+        '~/'*)
+            [ -n "${HOME:-}" ] || fail "HOME is required to expand $tool_path"
+            printf '%s/%s\n' "$HOME" "${tool_path#\~/}"
+            ;;
+        *) printf '%s\n' "$tool_path" ;;
+    esac
+}
+ADB=$(expand_home_tool_path "$ADB")
+CURL=$(expand_home_tool_path "$CURL")
+AAPT=$(expand_home_tool_path "$AAPT")
+APKSIGNER=$(expand_home_tool_path "$APKSIGNER")
+
+controller_prerequisite_gate() {
+    need "$CURL"
+    need python3
+    need "$AAPT"
+    need "$APKSIGNER"
+    if ! command -v shasum >/dev/null 2>&1; then
+        need sha256sum
+    fi
+    if [ -n "$bridge" ]; then
+        need ssh
+        need scp
+    else
+        need "$ADB"
+    fi
+}
+
 cleanup() {
     status=$?
     trap - 0 HUP INT TERM
@@ -732,6 +763,7 @@ remove_privileged_packages() {
 
 apply_changes() {
     [ "$assume_yes" -eq 1 ] || fail 'apply requires --yes'
+    controller_prerequisite_gate
     mutation_identity_gate
     if [ -n "$root_helper" ]; then
         root_helper_runtime_gate
