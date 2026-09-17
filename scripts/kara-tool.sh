@@ -551,6 +551,38 @@ verify_root_helper() {
     printf '%s\n' "$root_proof" | grep -Fx "DAEMON_EXE=$root_helper" >/dev/null || return 1
 }
 
+root_helper_runtime_gate() {
+    exploit_runtime_values
+    [ "$actual_kernel" = "$SUPPORTED_KERNEL" ] || fail "unsupported kernel release: $actual_kernel"
+    [ "$actual_machine" = "$SUPPORTED_MACHINE" ] || fail "unsupported machine: $actual_machine"
+    [ "$actual_abi" = "$SUPPORTED_ABI" ] || fail "unsupported primary ABI: $actual_abi"
+    [ "$actual_cpus" = "$SUPPORTED_CPUS" ] || fail "unsupported online CPU count: $actual_cpus"
+    [ "$actual_uid" = 2000 ] || fail "ADB shell must be uid 2000: $actual_uid"
+    case "$actual_selinux" in
+        Enforcing|Permissive) : ;;
+        *) fail "unsupported SELinux state for root-helper resume: $actual_selinux" ;;
+    esac
+    verify_root_helper || fail 'supplied root helper did not prove temporary uid 0'
+}
+
+clear_empty_ota_collision() {
+    # GhostLock can leave both paths present when each is an empty directory.
+    # rmdir is deliberately used so a live OTA payload can never be deleted.
+    ota_repair='if [ -e /data/local/tmp/kara-ota-package.PS7713-held ] && [ -d /data/ota_package ]; then if rmdir /data/ota_package 2>/dev/null; then sync; echo EMPTY_OTA_COLLISION_CLEARED; else echo NONEMPTY_OTA_LIVE_PATH; fi; fi'
+    ota_repair_output=$(device "$root_helper --cmd \"$ota_repair\"") ||
+        fail 'could not inspect the OTA collision'
+    case "$ota_repair_output" in
+        '') : ;;
+        EMPTY_OTA_COLLISION_CLEARED)
+            printf 'EMPTY_OTA_COLLISION_CLEARED=PASS\n'
+            ;;
+        NONEMPTY_OTA_LIVE_PATH)
+            fail 'live OTA path is not empty; manual review required'
+            ;;
+        *) fail "unexpected OTA collision response: $ota_repair_output" ;;
+    esac
+}
+
 verify_staged_ota_absent() {
     # shellcheck disable=SC2016
     ota_check='for p in /data/ota_package /cache/recovery/command /cache/recovery/block.map; do [ ! -e "$p" ] || echo "PRESENT:$p"; done'
@@ -594,9 +626,10 @@ obtain_temp_root() {
     while [ "$root_attempt" -lt "$KARA_ROOT_WAIT_ATTEMPTS" ]; do
         # If identity changed while the live attempt started, restore only the
         # CEC guard; replaying package state across firmware builds is unsafe.
+        saved_rollback_cec_only=$rollback_cec_only
         rollback_cec_only=1
         mutation_identity_gate
-        rollback_cec_only=0
+        rollback_cec_only=$saved_rollback_cec_only
         if verify_root_helper; then
             mutation_identity_gate
             printf 'TEMP_ROOT=PASS new-live-daemon\n'
@@ -699,13 +732,20 @@ remove_privileged_packages() {
 apply_changes() {
     [ "$assume_yes" -eq 1 ] || fail 'apply requires --yes'
     mutation_identity_gate
-    exploit_runtime_gate
+    if [ -n "$root_helper" ]; then
+        root_helper_runtime_gate
+    else
+        exploit_runtime_gate
+    fi
     create_backup
     rollback_needed=1
+    rollback_cec_only=1
     adb_call shell settings put secure block_cec_standby 1 >/dev/null
     [ "$(device settings get secure block_cec_standby)" = 1 ] || fail 'could not enable the exploit CEC reboot guard'
     obtain_temp_root
+    clear_empty_ota_collision
     verify_staged_ota_absent
+    rollback_cec_only=0
     install_projectivy
     install_aurora
     install_kara_settings

@@ -17,7 +17,26 @@ that proof. It never retries the race automatically.
 
 If ADB returns after an unexpected reboot, run `audit` again. Do not rerun
 `apply` until the build still matches and you have inspected the prior attempt's
-backup and device log at `/data/local/tmp/kara-ghostlock.start.log`.
+backup, launcher log at `/data/local/tmp/kara-ghostlock.start.log`, and detailed
+exploit log at `/data/local/tmp/kara-ghostlock.log`.
+
+If the detailed log ends with `ROOT DAEMON READY`, do not reboot or start the
+exploit again. Find the exact daemon path from `ps -A | grep kara-ghostlock` or
+`/proc/PID/exe`, update this repository, and resume the interrupted apply:
+
+```sh
+./scripts/kara-tool.sh \
+  --serial FIRE_TV_IP:5555 \
+  --root-helper /data/local/tmp/kara-ghostlock-NUMBER \
+  --yes apply
+```
+
+The script proves that the supplied path is the live uid-0 daemon for the exact
+supported build before accepting a permissive SELinux state. It does not launch
+another exploit attempt. If GhostLock left both the live and held OTA paths as
+empty directories, the script removes only the empty live directory with
+`rmdir` and preserves the held path. A non-empty live OTA path is never removed;
+`apply` stops for manual review before installing or removing packages.
 
 ## OTA boundary
 

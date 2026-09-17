@@ -178,7 +178,8 @@ path on the Linux host, passed to its ADB, and removed from the host afterward.
 The order is fail-closed:
 
 1. Verify the exact device, model, build, API, kernel, ABI, CPU count, shell
-   uid, and enforcing SELinux state.
+   uid, and enforcing SELinux state. A supplied exact-path root helper may
+   resume from permissive SELinux only after its uid-0 proof is verified.
 2. Record HOME, package inventories, firmware identity, OTA preference, CEC
    guard, and boot ID in a timestamped local backup.
 3. Download the exact exploit release and require its tag, filename, GitHub
@@ -187,8 +188,8 @@ The order is fail-closed:
    non-mutating `--probe`.
 5. Reuse an exactly matched live daemon or invoke live mode once; require uid 0,
    the root proof, exact daemon executable path, and unchanged firmware.
-6. Require the staged OTA directory and both recovery command paths to be
-   absent.
+6. Resolve only the known empty-directory OTA collision with `rmdir`, then
+   require the staged OTA directory and both recovery command paths to be absent.
 7. Download and authenticate Projectivy and Aurora Store, then install them and
    the included Kara Settings app.
 8. Make Projectivy HOME and require package-manager readback before removing
@@ -197,7 +198,9 @@ The order is fail-closed:
 
 `--root-helper /data/local/tmp/NAME` remains available for advanced recovery.
 It bypasses exploit launch only after providing the same uid-0, build, and exact
-daemon-executable proof.
+daemon-executable proof. This resume path never starts another exploit attempt;
+keep the Stick powered until `apply` finishes. See
+[`docs/RECOVERY.md`](docs/RECOVERY.md) for the exact command and OTA safeguards.
 
 ## Restore the backup
 

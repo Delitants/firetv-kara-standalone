@@ -23,6 +23,8 @@ new_fixture() {
     printf '0\n' > "$fixture/cec.state"
     printf '0\n' > "$fixture/root.state"
     printf '0035334210436\n' > "$fixture/build.state"
+    printf '%s\n' "${FAKE_OTA_LIVE_PATH:-missing}" > "$fixture/ota-live-path.state"
+    printf '%s\n' "${FAKE_OTA_HELD_PATH:-missing}" > "$fixture/ota-held-path.state"
     fixture_digest=$(shasum -a 256 "$fixture/projectivy.apk" | awk '{print $1}')
     fixture_exploit_digest=$(shasum -a 256 "$fixture/kara-exploit.arm" | awk '{print $1}')
     fixture_experimental_digest=$(shasum -a 256 "$fixture/kara-experimental.arm" | awk '{print $1}')
@@ -183,10 +185,23 @@ case "$*" in
             exit 2
         fi
         case "$*" in
-            *'/data/ota_package /cache/recovery/command /cache/recovery/block.map'*) : ;;
-            *)
+            *'EMPTY_OTA_COLLISION_CLEARED'*)
+                live_state=$(cat "$FAKE_OTA_LIVE_PATH_STATE")
+                held_state=$(cat "$FAKE_OTA_HELD_PATH_STATE")
+                if [ "$live_state" = empty ] && [ "$held_state" != missing ]; then
+                    printf 'missing\n' > "$FAKE_OTA_LIVE_PATH_STATE"
+                    printf 'EMPTY_OTA_COLLISION_CLEARED\n'
+                elif [ "$live_state" = nonempty ]; then
+                    printf 'NONEMPTY_OTA_LIVE_PATH\n'
+                fi ;;
+            *'/data/ota_package /cache/recovery/command /cache/recovery/block.map'*)
+                [ "$(cat "$FAKE_OTA_LIVE_PATH_STATE")" = missing ] ||
+                    printf 'PRESENT:/data/ota_package\n' ;;
+            *'runcon u:r:shell:s0 /system/bin/pm uninstall -k --user 0 com.amazon.vizzini'*)
                 grep -Fvx 'package:com.amazon.vizzini' "$FAKE_ACTIVE_PACKAGES" > "$FAKE_ACTIVE_PACKAGES.next" || true
                 mv "$FAKE_ACTIVE_PACKAGES.next" "$FAKE_ACTIVE_PACKAGES"
+                ;;
+            *)
                 helper_path=$(printf '%s\n' "$*" | sed -n 's#^shell \(/data/local/tmp/[^ ]*\) --cmd.*#\1#p')
                 printf 'uid=0(root) gid=0(root) context=u:r:kernel:s0\n'
                 current_build=$(cat "$FAKE_BUILD_STATE")
@@ -267,6 +282,8 @@ run_tool() {
     FAKE_CEC_STATE="$fixture/cec.state" \
     FAKE_ROOT_STATE="$fixture/root.state" \
     FAKE_BUILD_STATE="$fixture/build.state" \
+    FAKE_OTA_LIVE_PATH_STATE="$fixture/ota-live-path.state" \
+    FAKE_OTA_HELD_PATH_STATE="$fixture/ota-held-path.state" \
     KARA_REMOVE_MANIFEST="$fixture/remove-user0.txt" \
     KARA_PRIVILEGED_MANIFEST="$fixture/remove-privileged.txt" \
     KARA_EXPLOIT_EXPECTED_SHA256="$fixture_exploit_digest" \
@@ -489,6 +506,75 @@ test_uses_explicit_root_helper_for_protected_package() {
         ok 'uses explicit root helper for protected package'
     else
         not_ok 'uses explicit root helper for protected package'; cat "$fixture/out"; cat "$fixture/adb.log"
+    fi
+    rm -rf "$fixture"
+}
+
+test_resumes_verified_root_helper_while_selinux_is_permissive() {
+    new_fixture
+    printf 'package:com.amazon.vizzini\n' >> "$fixture/active.packages"
+    if FAKE_SELINUX=Permissive run_tool \
+        --root-helper /data/local/tmp/kara-root-helper --yes apply >"$fixture/out" 2>&1 &&
+        grep -F 'TEMP_ROOT=PASS supplied-helper' "$fixture/out" >/dev/null &&
+        ! grep -F -- '--live RUN-KARA-PS7713-GHOSTLOCK-V2' "$fixture/adb.log" >/dev/null
+    then
+        ok 'resumes a verified root helper while SELinux is permissive'
+    else
+        not_ok 'resumes a verified root helper while SELinux is permissive'; cat "$fixture/out"; cat "$fixture/adb.log"
+    fi
+    rm -rf "$fixture"
+}
+
+test_clears_only_empty_live_ota_collision() {
+    FAKE_OTA_LIVE_PATH=empty FAKE_OTA_HELD_PATH=empty new_fixture
+    printf 'package:com.amazon.vizzini\n' >> "$fixture/active.packages"
+    if FAKE_SELINUX=Permissive run_tool \
+        --root-helper /data/local/tmp/kara-root-helper --yes apply >"$fixture/out" 2>&1 &&
+        grep -F 'EMPTY_OTA_COLLISION_CLEARED=PASS' "$fixture/out" >/dev/null &&
+        [ "$(cat "$fixture/ota-live-path.state")" = missing ] &&
+        [ "$(cat "$fixture/ota-held-path.state")" = empty ] &&
+        ! grep -F -- '--live RUN-KARA-PS7713-GHOSTLOCK-V2' "$fixture/adb.log" >/dev/null
+    then
+        ok 'clears only an empty live OTA collision and preserves held state'
+    else
+        not_ok 'clears only an empty live OTA collision and preserves held state'; cat "$fixture/out"; cat "$fixture/adb.log"
+    fi
+    rm -rf "$fixture"
+}
+
+test_refuses_nonempty_live_ota_collision() {
+    FAKE_OTA_LIVE_PATH=nonempty FAKE_OTA_HELD_PATH=empty new_fixture
+    if FAKE_SELINUX=Permissive run_tool \
+        --root-helper /data/local/tmp/kara-root-helper --yes apply >"$fixture/out" 2>&1
+    then
+        not_ok 'refuses a non-empty live OTA collision'
+    elif grep -F 'live OTA path is not empty; manual review required' "$fixture/out" >/dev/null &&
+        [ "$(cat "$fixture/ota-live-path.state")" = nonempty ] &&
+        [ "$(cat "$fixture/ota-held-path.state")" = empty ] &&
+        [ "$(cat "$fixture/cec.state")" = 0 ] &&
+        ! grep -E 'install -r|cmd package install-existing|pm (uninstall|disable|enable)|set-home-activity' "$fixture/adb.log" >/dev/null
+    then
+        ok 'refuses a non-empty live OTA collision before package mutation'
+    else
+        not_ok 'refuses a non-empty live OTA collision'; cat "$fixture/out"; cat "$fixture/adb.log"
+    fi
+    rm -rf "$fixture"
+}
+
+test_refuses_nonempty_live_ota_collision_after_new_root() {
+    FAKE_OTA_LIVE_PATH=nonempty FAKE_OTA_HELD_PATH=empty new_fixture
+    if run_tool --yes apply >"$fixture/out" 2>&1
+    then
+        not_ok 'refuses a non-empty live OTA collision after new root'
+    elif grep -F 'live OTA path is not empty; manual review required' "$fixture/out" >/dev/null &&
+        [ "$(cat "$fixture/ota-live-path.state")" = nonempty ] &&
+        [ "$(cat "$fixture/ota-held-path.state")" = empty ] &&
+        [ "$(cat "$fixture/cec.state")" = 0 ] &&
+        ! grep -E 'install -r|cmd package install-existing|pm (uninstall|disable|enable)|set-home-activity' "$fixture/adb.log" >/dev/null
+    then
+        ok 'refuses a non-empty live OTA collision after new root before package mutation'
+    else
+        not_ok 'refuses a non-empty live OTA collision after new root'; cat "$fixture/out"; cat "$fixture/adb.log"
     fi
     rm -rf "$fixture"
 }
@@ -775,6 +861,10 @@ test_installs_aurora_before_home_switch
 test_fails_when_aurora_install_has_no_package_effect
 test_fails_when_requested_package_remains_active
 test_uses_explicit_root_helper_for_protected_package
+test_resumes_verified_root_helper_while_selinux_is_permissive
+test_clears_only_empty_live_ota_collision
+test_refuses_nonempty_live_ota_collision
+test_refuses_nonempty_live_ota_collision_after_new_root
 test_manifests_are_scoped_and_disjoint
 test_readme_documents_the_complete_workflow
 
