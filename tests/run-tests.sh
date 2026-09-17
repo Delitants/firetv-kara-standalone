@@ -16,12 +16,14 @@ new_fixture() {
     printf 'fixture official Aurora Store APK\n' > "$fixture/aurora.apk"
     printf 'fixture kara exploit ELF\n' > "$fixture/kara-exploit.arm"
     printf 'fixture experimental kara exploit ELF\n' > "$fixture/kara-experimental.arm"
-    printf 'package:com.amazon.tv.launcher\npackage:com.amazon.device.software.ota\n' > "$fixture/active.packages"
-    printf 'com.amazon.tv.launcher\ncom.amazon.device.software.ota\n' > "$fixture/remove-user0.txt"
+    printf 'package:com.amazon.tv.launcher\npackage:com.amazon.firehomestarter\npackage:com.amazon.device.software.ota\n' > "$fixture/active.packages"
+    printf 'com.amazon.tv.launcher\ncom.amazon.firehomestarter\ncom.amazon.device.software.ota\n' > "$fixture/remove-user0.txt"
     printf 'com.amazon.vizzini\n' > "$fixture/remove-privileged.txt"
     printf '0\n' > "$fixture/ota.state"
     printf '0\n' > "$fixture/cec.state"
     printf '0\n' > "$fixture/root.state"
+    printf 'enabled\n' > "$fixture/amazon-launcher.state"
+    printf 'enabled\n' > "$fixture/firehomestarter.state"
     printf '0035334210436\n' > "$fixture/build.state"
     printf '%s\n' "${FAKE_OTA_LIVE_PATH:-missing}" > "$fixture/ota-live-path.state"
     printf '%s\n' "${FAKE_OTA_HELD_PATH:-missing}" > "$fixture/ota-held-path.state"
@@ -143,10 +145,24 @@ case "$*" in
     'shell getenforce') printf '%s\n' "${FAKE_SELINUX:-Enforcing}" ;;
     'shell cat /proc/sys/kernel/random/boot_id') printf '11111111-2222-3333-4444-555555555555\n' ;;
     'shell cmd package resolve-activity --brief --components --user 0 -a android.intent.action.MAIN -c android.intent.category.HOME')
-        if [ -s "$FAKE_HOME_STATE" ]; then cat "$FAKE_HOME_STATE"
-        else printf '%s\n' "${FAKE_HOME:-com.amazon.tv.launcher/.ui.HomeActivity}"; fi ;;
+        if [ "$(cat "$FAKE_AMAZON_LAUNCHER_STATE")" = enabled ] &&
+            grep -Fx 'package:com.amazon.tv.launcher' "$FAKE_ACTIVE_PACKAGES" >/dev/null; then
+            printf 'com.amazon.tv.launcher/.ui.HomeActivity_vNext\n'
+        elif [ "$(cat "$FAKE_FIREHOMESTARTER_STATE")" = enabled ] &&
+            grep -Fx 'package:com.amazon.firehomestarter' "$FAKE_ACTIVE_PACKAGES" >/dev/null; then
+            printf 'com.amazon.firehomestarter/.HomeStarterActivity\n'
+        elif [ -s "$FAKE_HOME_STATE" ]; then cat "$FAKE_HOME_STATE"
+        else printf '%s\n' "${FAKE_HOME:-com.amazon.tv.launcher/.ui.HomeActivity_vNext}"; fi ;;
     'shell pm list packages --user 0') cat "$FAKE_ACTIVE_PACKAGES" ;;
-    'shell pm list packages -d --user 0') : ;;
+    'shell pm list packages -d --user 0')
+        if [ "$(cat "$FAKE_AMAZON_LAUNCHER_STATE")" = disabled ] &&
+            grep -Fx 'package:com.amazon.tv.launcher' "$FAKE_ACTIVE_PACKAGES" >/dev/null; then
+            printf 'package:com.amazon.tv.launcher\n'
+        fi
+        if [ "$(cat "$FAKE_FIREHOMESTARTER_STATE")" = disabled ] &&
+            grep -Fx 'package:com.amazon.firehomestarter' "$FAKE_ACTIVE_PACKAGES" >/dev/null; then
+            printf 'package:com.amazon.firehomestarter\n'
+        fi ;;
     install\ -r\ *ProjectivyLauncher*)
         printf 'package:com.spocky.projengmenu\n' >> "$FAKE_ACTIVE_PACKAGES"
         printf 'Success\n' ;;
@@ -178,6 +194,8 @@ case "$*" in
         if [ "${FAKE_SET_HOME_EFFECT:-1}" = 1 ]; then
             printf 'com.spocky.projengmenu/.ui.home.MainActivity\n' > "$FAKE_HOME_STATE"
         fi ;;
+    'shell am start -W --user 0 -n com.spocky.projengmenu/.ui.home.MainActivity')
+        printf 'Status: ok\nActivity: com.spocky.projengmenu/.ui.home.MainActivity\n' ;;
     'shell am start -W --user 0 -a android.intent.action.MAIN -c android.intent.category.HOME') : ;;
     shell\ pm\ uninstall\ -k\ --user\ 0\ com.amazon.*)
         package=${7-}
@@ -212,7 +230,49 @@ case "$*" in
             *'runcon u:r:shell:s0 /system/bin/pm uninstall -k --user 0 com.amazon.vizzini'*)
                 grep -Fvx 'package:com.amazon.vizzini' "$FAKE_ACTIVE_PACKAGES" > "$FAKE_ACTIVE_PACKAGES.next" || true
                 mv "$FAKE_ACTIVE_PACKAGES.next" "$FAKE_ACTIVE_PACKAGES"
-                ;;
+                printf 'Success\n' ;;
+            *'runcon u:r:shell:s0 /system/bin/pm disable --user 0 com.amazon.tv.launcher'*)
+                printf 'disabled\n' > "$FAKE_AMAZON_LAUNCHER_STATE"
+                printf 'Package com.amazon.tv.launcher new state: disabled\n' ;;
+            *'runcon u:r:shell:s0 /system/bin/pm disable --user 0 com.amazon.firehomestarter'*)
+                printf 'disabled\n' > "$FAKE_FIREHOMESTARTER_STATE"
+                printf 'Package com.amazon.firehomestarter new state: disabled\n' ;;
+            *'runcon u:r:shell:s0 /system/bin/cmd package set-home-activity --user 0 com.spocky.projengmenu/.ui.home.MainActivity'*)
+                if [ "${FAKE_SET_HOME_EFFECT:-1}" = 1 ]; then
+                    printf 'com.spocky.projengmenu/.ui.home.MainActivity\n' > "$FAKE_HOME_STATE"
+                fi
+                printf 'Success\n' ;;
+            *'runcon u:r:shell:s0 /system/bin/pm uninstall -k --user 0 com.amazon.tv.launcher'*)
+                [ "${FAKE_ROOT_UNINSTALL_FAIL_PACKAGE:-}" != com.amazon.tv.launcher ] || exit 1
+                grep -Fvx 'package:com.amazon.tv.launcher' "$FAKE_ACTIVE_PACKAGES" > "$FAKE_ACTIVE_PACKAGES.next" || true
+                mv "$FAKE_ACTIVE_PACKAGES.next" "$FAKE_ACTIVE_PACKAGES"
+                printf 'Success\n' ;;
+            *'runcon u:r:shell:s0 /system/bin/pm uninstall -k --user 0 com.amazon.firehomestarter'*)
+                [ "${FAKE_ROOT_UNINSTALL_FAIL_PACKAGE:-}" != com.amazon.firehomestarter ] || exit 1
+                grep -Fvx 'package:com.amazon.firehomestarter' "$FAKE_ACTIVE_PACKAGES" > "$FAKE_ACTIVE_PACKAGES.next" || true
+                mv "$FAKE_ACTIVE_PACKAGES.next" "$FAKE_ACTIVE_PACKAGES"
+                printf 'Success\n' ;;
+            *'runcon u:r:shell:s0 /system/bin/cmd package install-existing --user 0 com.amazon.tv.launcher'*)
+                if [ "${FAKE_ROOT_RESTORE_EFFECT:-1}" = 1 ]; then
+                    grep -Fx 'package:com.amazon.tv.launcher' "$FAKE_ACTIVE_PACKAGES" >/dev/null ||
+                        printf 'package:com.amazon.tv.launcher\n' >> "$FAKE_ACTIVE_PACKAGES"
+                fi
+                printf 'Package installed\n' ;;
+            *'runcon u:r:shell:s0 /system/bin/cmd package install-existing --user 0 com.amazon.firehomestarter'*)
+                if [ "${FAKE_ROOT_RESTORE_EFFECT:-1}" = 1 ]; then
+                    grep -Fx 'package:com.amazon.firehomestarter' "$FAKE_ACTIVE_PACKAGES" >/dev/null ||
+                        printf 'package:com.amazon.firehomestarter\n' >> "$FAKE_ACTIVE_PACKAGES"
+                fi
+                printf 'Package installed\n' ;;
+            *'runcon u:r:shell:s0 /system/bin/pm enable --user 0 com.amazon.tv.launcher'*)
+                printf 'enabled\n' > "$FAKE_AMAZON_LAUNCHER_STATE"
+                printf 'Package com.amazon.tv.launcher new state: enabled\n' ;;
+            *'runcon u:r:shell:s0 /system/bin/pm enable --user 0 com.amazon.firehomestarter'*)
+                printf 'enabled\n' > "$FAKE_FIREHOMESTARTER_STATE"
+                printf 'Package com.amazon.firehomestarter new state: enabled\n' ;;
+            *'runcon u:r:shell:s0 /system/bin/cmd package set-home-activity --user 0 com.amazon.tv.launcher/.ui.HomeActivity_vNext'*)
+                printf 'com.amazon.tv.launcher/.ui.HomeActivity_vNext\n' > "$FAKE_HOME_STATE"
+                printf 'Success\n' ;;
             *'id; cat /data/local/tmp/kara-root-ready'*)
                 printf '%s\n' "${FAKE_ROOT_ID_LINE:-uid=0(root) gid=0(root) context=u:r:kernel:s0}"
                 current_build=$(cat "$FAKE_BUILD_STATE")
@@ -237,7 +297,7 @@ case "$*" in
     'shell settings put secure block_cec_standby 0') printf '0\n' > "$FAKE_CEC_STATE" ;;
     'shell settings delete secure block_cec_standby') printf 'null\n' > "$FAKE_CEC_STATE" ;;
     'shell cmd package install-existing --user 0 com.amazon.'*) printf 'Package installed\n' ;;
-    'shell cmd package set-home-activity com.amazon.tv.launcher/.ui.HomeActivity') : ;;
+    'shell cmd package set-home-activity com.amazon.tv.launcher/.ui.HomeActivity_vNext') : ;;
     *) : ;;
 esac
 EOF
@@ -299,6 +359,8 @@ run_tool() {
     FAKE_OTA_STATE="$fixture/ota.state" \
     FAKE_CEC_STATE="$fixture/cec.state" \
     FAKE_ROOT_STATE="$fixture/root.state" \
+    FAKE_AMAZON_LAUNCHER_STATE="$fixture/amazon-launcher.state" \
+    FAKE_FIREHOMESTARTER_STATE="$fixture/firehomestarter.state" \
     FAKE_BUILD_STATE="$fixture/build.state" \
     FAKE_OTA_LIVE_PATH_STATE="$fixture/ota-live-path.state" \
     FAKE_OTA_HELD_PATH_STATE="$fixture/ota-held-path.state" \
@@ -777,11 +839,11 @@ test_ssh_bridge_stages_every_local_payload() {
 
 test_fails_when_requested_package_remains_active() {
     new_fixture
-    if FAKE_STICKY_PACKAGE=com.amazon.tv.launcher run_tool --yes apply >"$fixture/out" 2>&1; then
+    if FAKE_STICKY_PACKAGE=com.amazon.device.software.ota run_tool --yes apply >"$fixture/out" 2>&1; then
         not_ok 'fails when requested package remains active'
-    elif grep -F 'removed package is active: com.amazon.tv.launcher' "$fixture/out" >/dev/null &&
-        grep -F 'cmd package install-existing --user 0 com.amazon.tv.launcher' "$fixture/adb.log" >/dev/null &&
-        grep -F 'set-home-activity com.amazon.tv.launcher/.ui.HomeActivity' "$fixture/adb.log" >/dev/null
+    elif grep -F 'removed package is active: com.amazon.device.software.ota' "$fixture/out" >/dev/null &&
+        grep -F 'cmd package install-existing --user 0 com.amazon.device.software.ota' "$fixture/adb.log" >/dev/null &&
+        grep -F 'set-home-activity --user 0 com.amazon.tv.launcher/.ui.HomeActivity' "$fixture/adb.log" >/dev/null
     then
         ok 'fails when requested package remains active'
     else
@@ -800,11 +862,114 @@ test_refuses_removal_when_projectivy_does_not_become_home() {
     rm -rf "$fixture"
 }
 
+test_replaces_both_fire_os_home_blockers_under_root() {
+    new_fixture
+    if run_tool --root-helper /data/local/tmp/kara-root-helper --yes apply >"$fixture/out" 2>&1; then
+        direct_line=$(grep -n 'am start -W --user 0 -n com.spocky.projengmenu/.ui.home.MainActivity' "$fixture/adb.log" | head -n 1 | cut -d: -f1)
+        launcher_disable_line=$(grep -n 'pm disable --user 0 com.amazon.tv.launcher' "$fixture/adb.log" | head -n 1 | cut -d: -f1)
+        starter_disable_line=$(grep -n 'pm disable --user 0 com.amazon.firehomestarter' "$fixture/adb.log" | head -n 1 | cut -d: -f1)
+        home_line=$(grep -n 'cmd package set-home-activity --user 0 com.spocky.projengmenu/.ui.home.MainActivity' "$fixture/adb.log" | head -n 1 | cut -d: -f1)
+        launcher_remove_line=$(grep -n 'pm uninstall -k --user 0 com.amazon.tv.launcher' "$fixture/adb.log" | head -n 1 | cut -d: -f1)
+        starter_remove_line=$(grep -n 'pm uninstall -k --user 0 com.amazon.firehomestarter' "$fixture/adb.log" | head -n 1 | cut -d: -f1)
+        if [ -n "$direct_line" ] && [ "$direct_line" -lt "$launcher_disable_line" ] &&
+            [ "$launcher_disable_line" -lt "$home_line" ] && [ "$starter_disable_line" -lt "$home_line" ] &&
+            [ "$home_line" -lt "$launcher_remove_line" ] && [ "$home_line" -lt "$starter_remove_line" ] &&
+            ! grep -Fx 'package:com.amazon.tv.launcher' "$fixture/active.packages" >/dev/null &&
+            ! grep -Fx 'package:com.amazon.firehomestarter' "$fixture/active.packages" >/dev/null
+        then
+            ok 'replaces both higher-priority Fire OS HOME blockers under root'
+        else
+            not_ok 'replaces both higher-priority Fire OS HOME blockers under root'; cat "$fixture/adb.log"
+        fi
+    else
+        not_ok 'replaces both higher-priority Fire OS HOME blockers under root'; cat "$fixture/out"; cat "$fixture/adb.log"
+    fi
+    rm -rf "$fixture"
+}
+
+test_home_switch_failure_restores_fire_os_home_blockers() {
+    new_fixture
+    if FAKE_SET_HOME_EFFECT=0 run_tool --root-helper /data/local/tmp/kara-root-helper --yes apply >"$fixture/out" 2>&1; then
+        not_ok 'HOME switch failure restores both Fire OS HOME blockers'
+    elif grep -F 'Projectivy did not become HOME' "$fixture/out" >/dev/null &&
+        grep -F 'AUTOMATIC_ROLLBACK=PASS' "$fixture/out" >/dev/null &&
+        [ "$(cat "$fixture/amazon-launcher.state")" = enabled ] &&
+        [ "$(cat "$fixture/firehomestarter.state")" = enabled ] &&
+        grep -Fx 'package:com.amazon.tv.launcher' "$fixture/active.packages" >/dev/null &&
+        grep -Fx 'package:com.amazon.firehomestarter' "$fixture/active.packages" >/dev/null &&
+        grep -F 'pm enable --user 0 com.amazon.tv.launcher' "$fixture/adb.log" >/dev/null &&
+        grep -F 'pm enable --user 0 com.amazon.firehomestarter' "$fixture/adb.log" >/dev/null &&
+        grep -F 'cmd package set-home-activity --user 0 com.amazon.tv.launcher/.ui.HomeActivity' "$fixture/adb.log" >/dev/null
+    then
+        ok 'HOME switch failure restores both Fire OS HOME blockers'
+    else
+        not_ok 'HOME switch failure restores both Fire OS HOME blockers'; cat "$fixture/out"; cat "$fixture/adb.log"
+    fi
+    rm -rf "$fixture"
+}
+
+test_failure_after_home_blocker_removal_reinstalls_it() {
+    new_fixture
+    if FAKE_ROOT_UNINSTALL_FAIL_PACKAGE=com.amazon.firehomestarter \
+        run_tool --root-helper /data/local/tmp/kara-root-helper --yes apply >"$fixture/out" 2>&1; then
+        not_ok 'failure after HOME blocker removal reinstalls it'
+    elif grep -F 'could not remove Fire OS HOME blocker: com.amazon.firehomestarter' "$fixture/out" >/dev/null &&
+        grep -F 'AUTOMATIC_ROLLBACK=PASS' "$fixture/out" >/dev/null &&
+        grep -Fx 'package:com.amazon.tv.launcher' "$fixture/active.packages" >/dev/null &&
+        grep -Fx 'package:com.amazon.firehomestarter' "$fixture/active.packages" >/dev/null &&
+        [ "$(cat "$fixture/amazon-launcher.state")" = enabled ] &&
+        [ "$(cat "$fixture/firehomestarter.state")" = enabled ]
+    then
+        remove_line=$(grep -n 'pm uninstall -k --user 0 com.amazon.tv.launcher' "$fixture/adb.log" | head -n 1 | cut -d: -f1)
+        install_line=$(grep -n 'cmd package install-existing --user 0 com.amazon.tv.launcher' "$fixture/adb.log" | tail -n 1 | cut -d: -f1)
+        enable_line=$(grep -n 'pm enable --user 0 com.amazon.tv.launcher' "$fixture/adb.log" | tail -n 1 | cut -d: -f1)
+        if [ -n "$remove_line" ] && [ "$remove_line" -lt "$install_line" ] && [ "$install_line" -lt "$enable_line" ]; then
+            ok 'failure after HOME blocker removal reinstalls it'
+        else
+            not_ok 'failure after HOME blocker removal reinstalls it'; cat "$fixture/adb.log"
+        fi
+    else
+        not_ok 'failure after HOME blocker removal reinstalls it'; cat "$fixture/out"; cat "$fixture/adb.log"
+    fi
+    rm -rf "$fixture"
+}
+
+test_rollback_fails_when_home_blocker_readback_is_wrong() {
+    new_fixture
+    if FAKE_ROOT_UNINSTALL_FAIL_PACKAGE=com.amazon.firehomestarter FAKE_ROOT_RESTORE_EFFECT=0 \
+        run_tool --root-helper /data/local/tmp/kara-root-helper --yes apply >"$fixture/out" 2>&1; then
+        not_ok 'rollback fails when HOME blocker readback is wrong'
+    elif grep -F 'AUTOMATIC_ROLLBACK=FAIL' "$fixture/out" >/dev/null &&
+        ! grep -F 'RESTORE_GATE=PASS' "$fixture/out" >/dev/null
+    then
+        ok 'rollback fails when HOME blocker readback is wrong'
+    else
+        not_ok 'rollback fails when HOME blocker readback is wrong'; cat "$fixture/out"; cat "$fixture/adb.log"
+    fi
+    rm -rf "$fixture"
+}
+
+test_restore_requires_root_for_backed_up_home_blockers() {
+    new_fixture
+    backup_output=$(run_tool backup)
+    saved_backup=$(printf '%s\n' "$backup_output" | sed -n 's/^BACKUP_DIR=//p')
+    if run_tool --backup "$saved_backup" --yes restore >"$fixture/out" 2>&1; then
+        not_ok 'restore requires root for backed-up Fire OS HOME blockers'
+    elif grep -F 'restore of Fire OS HOME blockers requires --root-helper' "$fixture/out" >/dev/null &&
+        ! grep -E 'install-existing|set-home-activity|pm (disable|enable)' "$fixture/adb.log" >/dev/null
+    then
+        ok 'restore requires root for backed-up Fire OS HOME blockers'
+    else
+        not_ok 'restore requires root for backed-up Fire OS HOME blockers'; cat "$fixture/out"; cat "$fixture/adb.log"
+    fi
+    rm -rf "$fixture"
+}
+
 test_installs_kara_settings_before_home_switch() {
     new_fixture
     if run_tool --yes apply >"$fixture/out" 2>&1; then
         settings_line=$(grep -n 'install -r .*kara-settings-v5-signed.apk' "$fixture/adb.log" | head -n 1 | cut -d: -f1)
-        home_line=$(grep -n 'set-home-activity com.spocky.projengmenu' "$fixture/adb.log" | head -n 1 | cut -d: -f1)
+        home_line=$(grep -n 'set-home-activity --user 0 com.spocky.projengmenu' "$fixture/adb.log" | head -n 1 | cut -d: -f1)
         if [ -n "$settings_line" ] && [ "$settings_line" -lt "$home_line" ]; then
             ok 'installs Kara Settings before HOME switch'
         else
@@ -820,7 +985,7 @@ test_installs_aurora_before_home_switch() {
     new_fixture
     if run_tool --yes apply >"$fixture/out" 2>&1; then
         aurora_line=$(grep -n 'install -r .*AuroraStore-4.8.4.apk' "$fixture/adb.log" | head -n 1 | cut -d: -f1)
-        home_line=$(grep -n 'set-home-activity com.spocky.projengmenu' "$fixture/adb.log" | head -n 1 | cut -d: -f1)
+        home_line=$(grep -n 'set-home-activity --user 0 com.spocky.projengmenu' "$fixture/adb.log" | head -n 1 | cut -d: -f1)
         if [ -n "$aurora_line" ] && [ "$aurora_line" -lt "$home_line" ]; then
             ok 'installs Aurora Store before HOME switch'
         else
@@ -907,7 +1072,7 @@ test_installs_home_before_removing_amazon_packages() {
     new_fixture
     if run_tool --yes apply >"$fixture/out" 2>&1; then
         install_line=$(grep -n '^install -r ' "$fixture/adb.log" | head -n 1 | cut -d: -f1)
-        home_line=$(grep -n 'set-home-activity com.spocky.projengmenu' "$fixture/adb.log" | head -n 1 | cut -d: -f1)
+        home_line=$(grep -n 'set-home-activity --user 0 com.spocky.projengmenu' "$fixture/adb.log" | head -n 1 | cut -d: -f1)
         remove_line=$(grep -n 'pm uninstall -k --user 0 com.amazon' "$fixture/adb.log" | head -n 1 | cut -d: -f1)
         if [ -n "$install_line" ] && [ "$install_line" -lt "$home_line" ] && [ "$home_line" -lt "$remove_line" ] &&
             find "$fixture/backups" -type f -name state.env | grep . >/dev/null
@@ -970,6 +1135,11 @@ test_refuses_wrong_model_before_mutation
 test_requires_confirmation_before_mutation
 test_installs_home_before_removing_amazon_packages
 test_refuses_removal_when_projectivy_does_not_become_home
+test_replaces_both_fire_os_home_blockers_under_root
+test_home_switch_failure_restores_fire_os_home_blockers
+test_failure_after_home_blocker_removal_reinstalls_it
+test_rollback_fails_when_home_blocker_readback_is_wrong
+test_restore_requires_root_for_backed_up_home_blockers
 test_installs_kara_settings_before_home_switch
 test_installs_aurora_before_home_switch
 test_fails_when_aurora_install_has_no_package_effect

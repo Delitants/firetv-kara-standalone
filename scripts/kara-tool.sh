@@ -4,6 +4,8 @@ set -eu
 PROJECTIVY_REPO=spocky/miproja1
 PROJECTIVY_PACKAGE=com.spocky.projengmenu
 PROJECTIVY_HOME=com.spocky.projengmenu/.ui.home.MainActivity
+AMAZON_HOME_PACKAGE=com.amazon.tv.launcher
+AMAZON_HOME_STARTER_PACKAGE=com.amazon.firehomestarter
 PROJECTIVY_CERT_SHA256=f6697bf4082ee97511e4de07863193884a015b7ab5860430321bda1042b0aadd
 AURORA_PACKAGE=com.aurora.store
 AURORA_CERT_SHA256=4c626157ad02bda3401a7263555f68a79663fc3e13a4d4369a12570941aa280f
@@ -779,6 +781,53 @@ remove_privileged_packages() {
     printf 'PRIVILEGED_REMOVAL=PASS\n'
 }
 
+root_command() {
+    fixed_command=$1
+    [ -n "$root_helper" ] || fail 'temporary root helper is required'
+    device "$root_helper --cmd \"$fixed_command\""
+}
+
+disable_fire_os_home_blocker() {
+    home_blocker=$1
+    disable_output=$(root_command "runcon u:r:shell:s0 /system/bin/pm disable --user 0 $home_blocker") ||
+        fail "could not disable Fire OS HOME blocker: $home_blocker"
+    printf '%s\n' "$disable_output" | grep -F "Package $home_blocker new state: disabled" >/dev/null ||
+        fail "Fire OS HOME blocker did not report disabled: $home_blocker"
+}
+
+remove_fire_os_home_blocker() {
+    home_blocker=$1
+    remove_output=$(root_command "runcon u:r:shell:s0 /system/bin/pm uninstall -k --user 0 $home_blocker") ||
+        fail "could not remove Fire OS HOME blocker: $home_blocker"
+    printf '%s\n' "$remove_output" | tr -d '\r' | tail -n 1 | grep -Fx Success >/dev/null ||
+        fail "Fire OS HOME blocker removal did not report Success: $home_blocker"
+}
+
+activate_projectivy_home() {
+    direct_start=$(device am start -W --user 0 -n "$PROJECTIVY_HOME") ||
+        fail 'Projectivy activity could not be started directly'
+    printf '%s\n' "$direct_start" | grep -F 'Status: ok' >/dev/null ||
+        fail 'Projectivy direct activity start did not report success'
+
+    # Fire OS assigns Amazon's launcher and Home Starter higher resolver
+    # priorities than a user-installed launcher. They must be disabled from
+    # the proven root/shell context before set-home-activity can take effect.
+    disable_fire_os_home_blocker "$AMAZON_HOME_PACKAGE"
+    disable_fire_os_home_blocker "$AMAZON_HOME_STARTER_PACKAGE"
+
+    root_command "runcon u:r:shell:s0 /system/bin/cmd package set-home-activity --user 0 $PROJECTIVY_HOME" >/dev/null ||
+        fail 'could not set Projectivy as HOME from the root helper'
+    selected_home=$(device cmd package resolve-activity --brief --components --user 0 -a android.intent.action.MAIN -c android.intent.category.HOME)
+    [ "$selected_home" = "$PROJECTIVY_HOME" ] || fail "Projectivy did not become HOME: $selected_home"
+    adb_call shell am start -W --user 0 -a android.intent.action.MAIN -c android.intent.category.HOME >/dev/null
+    selected_home=$(device cmd package resolve-activity --brief --components --user 0 -a android.intent.action.MAIN -c android.intent.category.HOME)
+    [ "$selected_home" = "$PROJECTIVY_HOME" ] || fail "Projectivy did not remain HOME after launch: $selected_home"
+
+    remove_fire_os_home_blocker "$AMAZON_HOME_PACKAGE"
+    remove_fire_os_home_blocker "$AMAZON_HOME_STARTER_PACKAGE"
+    printf 'PROJECTIVY_HOME_GATE=PASS\n'
+}
+
 apply_changes() {
     [ "$assume_yes" -eq 1 ] || fail 'apply requires --yes'
     controller_prerequisite_gate
@@ -800,14 +849,14 @@ apply_changes() {
     install_projectivy
     install_aurora
     install_kara_settings
-    adb_call shell cmd package set-home-activity "$PROJECTIVY_HOME" >/dev/null
-    selected_home=$(device cmd package resolve-activity --brief --components --user 0 -a android.intent.action.MAIN -c android.intent.category.HOME)
-    [ "$selected_home" = "$PROJECTIVY_HOME" ] || fail "Projectivy did not become HOME: $selected_home"
-    adb_call shell am start -W --user 0 -a android.intent.action.MAIN -c android.intent.category.HOME >/dev/null
+    activate_projectivy_home
     [ -r "$manifest" ] || fail 'package removal manifest is missing'
     while IFS= read -r package_name; do
         [ -n "$package_name" ] || continue
         case "$package_name" in com.amazon.*|amazon.*) : ;; *) fail "unsafe package in manifest: $package_name" ;; esac
+        case "$package_name" in
+            "$AMAZON_HOME_PACKAGE"|"$AMAZON_HOME_STARTER_PACKAGE") continue ;;
+        esac
         adb_call shell pm uninstall -k --user 0 "$package_name" >/dev/null || true
     done < "$manifest"
     remove_privileged_packages
@@ -883,12 +932,40 @@ restore_backup() {
     backup_model=$(sed -n 's/^MODEL=//p' "$state")
     backup_build=$(sed -n 's/^BUILD=//p' "$state")
     [ "$backup_device/$backup_model/$backup_build" = "$actual_device/$actual_model/$actual_build" ] || fail 'backup identity mismatch'
+    backup_has_home_blocker=0
+    for home_blocker in "$AMAZON_HOME_PACKAGE" "$AMAZON_HOME_STARTER_PACKAGE"; do
+        if grep -Fx "package:$home_blocker" "$packages" >/dev/null; then
+            backup_has_home_blocker=1
+        fi
+    done
+    if [ "$backup_has_home_blocker" -eq 1 ] && [ -z "$root_helper" ]; then
+        fail 'restore of Fire OS HOME blockers requires --root-helper /data/local/tmp/NAME'
+    fi
+    if [ -n "$root_helper" ]; then
+        verify_root_helper || fail 'supplied root helper did not prove temporary uid 0 for restore'
+    fi
     old_home=$(sed -n 's/^HOME=//p' "$state")
     case "$old_home" in *[!A-Za-z0-9._/\$-]*) fail 'unsafe HOME value in backup' ;; esac
     for restore_manifest in "$manifest" "$privileged_manifest"; do
         while IFS= read -r package_name; do
             [ -n "$package_name" ] || continue
             if grep -Fx "package:$package_name" "$packages" >/dev/null; then
+                case "$package_name" in
+                    "$AMAZON_HOME_PACKAGE"|"$AMAZON_HOME_STARTER_PACKAGE")
+                        if [ -n "$root_helper" ]; then
+                            root_command "runcon u:r:shell:s0 /system/bin/cmd package install-existing --user 0 $package_name" >/dev/null ||
+                                fail "could not restore $package_name"
+                            if grep -Fx "package:$package_name" "$disabled" >/dev/null; then
+                                root_command "runcon u:r:shell:s0 /system/bin/pm disable --user 0 $package_name" >/dev/null ||
+                                    fail "could not restore disabled state for $package_name"
+                            else
+                                root_command "runcon u:r:shell:s0 /system/bin/pm enable --user 0 $package_name" >/dev/null ||
+                                    fail "could not re-enable $package_name"
+                            fi
+                            continue
+                        fi
+                        ;;
+                esac
                 adb_call shell cmd package install-existing --user 0 "$package_name" >/dev/null || fail "could not restore $package_name"
                 if grep -Fx "package:$package_name" "$disabled" >/dev/null; then
                     adb_call shell pm disable --user 0 "$package_name" >/dev/null
@@ -896,7 +973,14 @@ restore_backup() {
             fi
         done < "$restore_manifest"
     done
-    [ -n "$old_home" ] && adb_call shell cmd package set-home-activity "$old_home" >/dev/null
+    if [ -n "$old_home" ]; then
+        if [ -n "$root_helper" ]; then
+            root_command "runcon u:r:shell:s0 /system/bin/cmd package set-home-activity --user 0 $old_home" >/dev/null ||
+                fail 'could not restore the previous HOME activity'
+        else
+            adb_call shell cmd package set-home-activity "$old_home" >/dev/null
+        fi
+    fi
     old_ota=$(sed -n 's/^OTA_DISABLE_AUTOMATIC_UPDATE=//p' "$state")
     case "$old_ota" in null|'') adb_call shell settings delete global ota_disable_automatic_update >/dev/null ;;
         *) adb_call shell settings put global ota_disable_automatic_update "$old_ota" >/dev/null ;;
@@ -904,6 +988,36 @@ restore_backup() {
     old_cec=$(sed -n 's/^BLOCK_CEC_STANDBY=//p' "$state")
     case "$old_cec" in null|'') adb_call shell settings delete secure block_cec_standby >/dev/null ;;
         *) adb_call shell settings put secure block_cec_standby "$old_cec" >/dev/null ;;
+    esac
+
+    restored_active=$(device pm list packages --user 0)
+    restored_disabled=$(device pm list packages -d --user 0)
+    for restore_manifest in "$manifest" "$privileged_manifest"; do
+        while IFS= read -r package_name; do
+            [ -n "$package_name" ] || continue
+            if grep -Fx "package:$package_name" "$packages" >/dev/null; then
+                printf '%s\n' "$restored_active" | grep -Fx "package:$package_name" >/dev/null ||
+                    fail "restored package is not active: $package_name"
+                if grep -Fx "package:$package_name" "$disabled" >/dev/null; then
+                    printf '%s\n' "$restored_disabled" | grep -Fx "package:$package_name" >/dev/null ||
+                        fail "restored package is not disabled: $package_name"
+                elif printf '%s\n' "$restored_disabled" | grep -Fx "package:$package_name" >/dev/null; then
+                    fail "restored package is unexpectedly disabled: $package_name"
+                fi
+            fi
+        done < "$restore_manifest"
+    done
+    if [ -n "$old_home" ]; then
+        restored_home=$(device cmd package resolve-activity --brief --components --user 0 -a android.intent.action.MAIN -c android.intent.category.HOME)
+        [ "$restored_home" = "$old_home" ] || fail "previous HOME was not restored: $restored_home"
+    fi
+    restored_ota=$(device settings get global ota_disable_automatic_update)
+    case "$old_ota" in null|'') [ "$restored_ota" = null ] || fail "OTA preference was not restored: $restored_ota" ;;
+        *) [ "$restored_ota" = "$old_ota" ] || fail "OTA preference was not restored: $restored_ota" ;;
+    esac
+    restored_cec=$(device settings get secure block_cec_standby)
+    case "$old_cec" in null|'') [ "$restored_cec" = null ] || fail "CEC guard was not restored: $restored_cec" ;;
+        *) [ "$restored_cec" = "$old_cec" ] || fail "CEC guard was not restored: $restored_cec" ;;
     esac
     printf 'RESTORE_GATE=PASS\n'
 }

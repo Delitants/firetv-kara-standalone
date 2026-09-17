@@ -192,8 +192,10 @@ The order is fail-closed:
    require the staged OTA directory and both recovery command paths to be absent.
 7. Download and authenticate Projectivy and Aurora Store, then install them and
    the included Kara Settings app.
-8. Make Projectivy HOME and require package-manager readback before removing
-   the 115 ordinary and one protected reviewed Amazon packages for user 0.
+8. Direct-start Projectivy, root-disable both higher-priority Fire OS HOME
+   blockers (`com.amazon.tv.launcher` and `com.amazon.firehomestarter`), set and
+   read back Projectivy as HOME, then root-remove those blockers before removing
+   the remaining reviewed Amazon packages for user 0.
 9. Set the OTA preference and verify the complete result.
 
 `--root-helper /data/local/tmp/NAME` remains available for advanced recovery.
@@ -201,6 +203,8 @@ It bypasses exploit launch only after providing the same uid-0, build, and exact
 daemon-executable proof. This resume path never starts another exploit attempt;
 keep the Stick powered until `apply` finishes. See
 [`docs/RECOVERY.md`](docs/RECOVERY.md) for the exact command and OTA safeguards.
+If an older checkout reports that Amazon's launcher remained HOME, leave the
+root daemon running, update the repository, and rerun this same resume command.
 
 ## Restore the backup
 
@@ -210,13 +214,18 @@ same connection options and pass the absolute directory:
 ```sh
 ./scripts/kara-tool.sh \
   --serial FIRE_TV_IP:5555 \
+  --root-helper /data/local/tmp/kara-ghostlock-NUMBER \
   --backup /absolute/path/to/backups/TIMESTAMP-PID \
   --yes restore
 ```
 
 For a USB bridge, add `--bridge root@LINUX_HOST --serial USB_SERIAL`. Restore
 reinstalls only packages that were present in that backup and restores their
-disabled state, HOME, OTA preference, and CEC guard. It does not flash firmware.
+disabled state, HOME, OTA preference, and CEC guard, then reads all of that state
+back before reporting success. A backup containing the protected Fire OS HOME
+packages requires the still-live, verified root helper; rootless restore is
+refused. If the daemon was lost to a reboot, obtain a fresh exact-build temporary
+root before restoring. Restore does not flash firmware.
 
 ## Complete exploit source
 

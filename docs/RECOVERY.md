@@ -38,6 +38,13 @@ empty directories, the script removes only the empty live directory with
 `rmdir` and preserves the held path. A non-empty live OTA path is never removed;
 `apply` stops for manual review before installing or removing packages.
 
+Fire OS gives its launcher and Home Starter higher HOME resolver priorities
+than an installed launcher. Current `apply` verifies that Projectivy starts,
+uses the proven root helper to disable both blockers, verifies Projectivy as
+HOME, and only then removes the blockers for user 0. If that transition fails,
+automatic rollback reinstalls and re-enables the blockers according to the
+backup and restores the previous HOME before reporting success or failure.
+
 ## OTA boundary
 
 After root succeeds, the exploit quarantines any staged `/data/ota_package`,
@@ -67,6 +74,7 @@ that case, preserve the backup and restore explicitly after ADB is stable.
 ```sh
 ./scripts/kara-tool.sh \
   --serial DEVICE_IP:5555 \
+  --root-helper /data/local/tmp/kara-ghostlock-NUMBER \
   --backup /absolute/path/to/backups/TIMESTAMP-PID \
   --yes restore
 ```
@@ -74,7 +82,15 @@ that case, preserve the backup and restore explicitly after ADB is stable.
 Add the same `--bridge` option used during installation when applicable. The
 restore command verifies the same device/build, reinstalls only manifest
 packages recorded as present, restores their disabled state, restores HOME,
-and restores or deletes the OTA and CEC settings according to the backup.
+and restores or deletes the OTA and CEC settings according to the backup. It
+then reads back package presence, disabled state, HOME, OTA, and CEC before
+printing `RESTORE_GATE=PASS`.
+
+Backups containing `com.amazon.tv.launcher` or `com.amazon.firehomestarter`
+require the exact still-live root helper because Fire OS protects these package
+state changes. If a reboot destroyed temporary root, do not attempt a rootless
+restore: obtain fresh temporary root for the exact supported build first, then
+run the command above with that daemon path.
 
 Projectivy, Aurora Store, and Kara Settings remain installed after this package
 state rollback. Remove them only after a working HOME and Settings path have
