@@ -71,6 +71,8 @@ apk_certificate_sha256() {
 }
 expand_home_tool_path() {
     tool_path=$1
+    # The quoted tilde is intentionally matched as input, then expanded below.
+    # shellcheck disable=SC2088
     case "$tool_path" in
         '~/'*)
             [ -n "${HOME:-}" ] || fail "HOME is required to expand $tool_path"

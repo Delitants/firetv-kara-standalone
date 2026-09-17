@@ -318,6 +318,8 @@ test_expands_home_relative_build_tool_paths() {
     cp "$fixture/bin/curl" "$fixture/home/tools/curl"
     cp "$fixture/bin/aapt" "$fixture/home/tools/aapt"
     cp "$fixture/bin/apksigner" "$fixture/home/tools/apksigner"
+    # These literal tildes exercise the tool's explicit home expansion.
+    # shellcheck disable=SC2088
     if output=$(TEST_HOME="$fixture/home" TEST_ADB='~/tools/adb' \
         TEST_CURL='~/tools/curl' TEST_AAPT='~/tools/aapt' \
         TEST_APKSIGNER='~/tools/apksigner' run_tool download-projectivy 2>&1) &&
