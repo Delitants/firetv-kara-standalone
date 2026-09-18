@@ -227,9 +227,13 @@ disabled state, HOME, OTA preference, and CEC guard, then reads all of that stat
 back before reporting success. A backup containing the protected Fire OS HOME
 packages is registered for user 0 through the ordinary ADB shell context, then
 uses the still-live, verified root helper only for their protected enabled state
-and HOME selection. Rootless restore is refused. If the daemon was lost to a
-reboot, obtain a fresh exact-build temporary root before restoring. Restore does
-not flash firmware.
+and HOME selection. These two packages are restored after every other manifest
+package so later Fire OS package activity cannot revert them to
+`installed=false`. If the backed-up launcher activity is no longer eligible as
+HOME, the verified Fire OS equivalent
+`com.amazon.firehomestarter/.HomeStarterActivity` is accepted. Rootless restore
+is refused. If the daemon was lost to a reboot, obtain a fresh exact-build
+temporary root before restoring. Restore does not flash firmware.
 
 ## Complete exploit source
 

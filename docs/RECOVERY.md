@@ -93,11 +93,19 @@ Backups containing `com.amazon.tv.launcher` or `com.amazon.firehomestarter`
 require the exact still-live root helper because Fire OS protects these package
 state changes. Restore registers those packages for user 0 from the ordinary
 ADB shell context, verifies that registration immediately, and then uses root
-only to restore the protected enabled state and HOME selection. This split is
-intentional: on kara, the root-derived package-manager context can report
-success without changing user-0 registration. If a reboot destroyed temporary
-root, do not attempt a rootless restore: obtain fresh temporary root for the
-exact supported build first, then run the command above with that daemon path.
+only to restore the protected enabled state and HOME selection. Restore defers
+both packages until every generic manifest package has finished because later
+Fire OS package restoration can revert their user-0 `installed` state. This
+split and ordering are intentional: on kara, the root-derived package-manager
+context can report success without changing user-0 registration.
+
+The backed-up launcher component may reject direct HOME selection after it is
+reinstalled. When both protected packages remain active and Fire OS resolves
+`com.amazon.firehomestarter/.HomeStarterActivity`, restore accepts that component
+as the verified equivalent of the backed-up Amazon launcher HOME. Any other
+resolver mismatch still fails closed. If a reboot destroyed temporary root, do
+not attempt a rootless restore: obtain fresh temporary root for the exact
+supported build first, then run the command above with that daemon path.
 
 Projectivy, Aurora Store, and Kara Settings remain installed after this package
 state rollback. Remove them only after a working HOME and Settings path have

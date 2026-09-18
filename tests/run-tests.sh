@@ -145,7 +145,11 @@ case "$*" in
     'shell getenforce') printf '%s\n' "${FAKE_SELINUX:-Enforcing}" ;;
     'shell cat /proc/sys/kernel/random/boot_id') printf '11111111-2222-3333-4444-555555555555\n' ;;
     'shell cmd package resolve-activity --brief --components --user 0 -a android.intent.action.MAIN -c android.intent.category.HOME')
-        if [ "$(cat "$FAKE_AMAZON_LAUNCHER_STATE")" = enabled ] &&
+        if [ "${FAKE_FIREHOME_RESOLVER_PRIORITY:-0}" = 1 ] &&
+            [ "$(cat "$FAKE_FIREHOMESTARTER_STATE")" = enabled ] &&
+            grep -Fx 'package:com.amazon.firehomestarter' "$FAKE_ACTIVE_PACKAGES" >/dev/null; then
+            printf 'com.amazon.firehomestarter/.HomeStarterActivity\n'
+        elif [ "$(cat "$FAKE_AMAZON_LAUNCHER_STATE")" = enabled ] &&
             grep -Fx 'package:com.amazon.tv.launcher' "$FAKE_ACTIVE_PACKAGES" >/dev/null; then
             printf 'com.amazon.tv.launcher/.ui.HomeActivity_vNext\n'
         elif [ "$(cat "$FAKE_FIREHOMESTARTER_STATE")" = enabled ] &&
@@ -275,6 +279,10 @@ case "$*" in
                 printf 'enabled\n' > "$FAKE_FIREHOMESTARTER_STATE"
                 printf 'Package com.amazon.firehomestarter new state: enabled\n' ;;
             *'runcon u:r:shell:s0 /system/bin/cmd package set-home-activity --user 0 com.amazon.tv.launcher/.ui.HomeActivity_vNext'*)
+                [ "${FAKE_REJECT_AMAZON_LAUNCHER_HOME:-0}" != 1 ] || {
+                    printf 'java.lang.IllegalArgumentException: component cannot be home\n' >&2
+                    exit 1
+                }
                 printf 'com.amazon.tv.launcher/.ui.HomeActivity_vNext\n' > "$FAKE_HOME_STATE"
                 printf 'Success\n' ;;
             *'id; cat /data/local/tmp/kara-root-ready'*)
@@ -305,6 +313,12 @@ case "$*" in
         if [ "${FAKE_SHELL_RESTORE_EFFECT:-1}" = 1 ]; then
             grep -Fx "package:$package" "$FAKE_ACTIVE_PACKAGES" >/dev/null ||
                 printf 'package:%s\n' "$package" >> "$FAKE_ACTIVE_PACKAGES"
+        fi
+        if [ "${FAKE_GENERIC_RESTORE_CLEARS_HOME:-0}" = 1 ] &&
+            [ "$package" = com.amazon.device.software.ota ]; then
+            grep -Fvx 'package:com.amazon.tv.launcher' "$FAKE_ACTIVE_PACKAGES" |
+                grep -Fvx 'package:com.amazon.firehomestarter' > "$FAKE_ACTIVE_PACKAGES.next" || true
+            mv "$FAKE_ACTIVE_PACKAGES.next" "$FAKE_ACTIVE_PACKAGES"
         fi
         printf 'Package installed\n' ;;
     'shell cmd package set-home-activity com.amazon.tv.launcher/.ui.HomeActivity_vNext') : ;;
@@ -1035,6 +1049,60 @@ test_restore_requires_root_for_backed_up_home_blockers() {
     rm -rf "$fixture"
 }
 
+test_restore_defers_home_blockers_until_generic_packages_finish() {
+    new_fixture
+    backup_output=$(run_tool backup)
+    saved_backup=$(printf '%s\n' "$backup_output" | sed -n 's/^BACKUP_DIR=//p')
+    grep -Fvx 'package:com.amazon.tv.launcher' "$fixture/active.packages" |
+        grep -Fvx 'package:com.amazon.firehomestarter' > "$fixture/active.packages.next" || true
+    mv "$fixture/active.packages.next" "$fixture/active.packages"
+    printf 'disabled\n' > "$fixture/amazon-launcher.state"
+    printf 'disabled\n' > "$fixture/firehomestarter.state"
+    printf 'com.spocky.projengmenu/.ui.home.MainActivity\n' > "$fixture/home.state"
+    if FAKE_GENERIC_RESTORE_CLEARS_HOME=1 \
+        run_tool --root-helper /data/local/tmp/kara-root-helper \
+        --backup "$saved_backup" --yes restore >"$fixture/out" 2>&1 &&
+        grep -F 'RESTORE_GATE=PASS' "$fixture/out" >/dev/null &&
+        grep -Fx 'package:com.amazon.tv.launcher' "$fixture/active.packages" >/dev/null &&
+        grep -Fx 'package:com.amazon.firehomestarter' "$fixture/active.packages" >/dev/null
+    then
+        generic_line=$(grep -nFx 'shell cmd package install-existing --user 0 com.amazon.device.software.ota' "$fixture/adb.log" | tail -n 1 | cut -d: -f1)
+        launcher_line=$(grep -nFx 'shell cmd package install-existing --user 0 com.amazon.tv.launcher' "$fixture/adb.log" | tail -n 1 | cut -d: -f1)
+        starter_line=$(grep -nFx 'shell cmd package install-existing --user 0 com.amazon.firehomestarter' "$fixture/adb.log" | tail -n 1 | cut -d: -f1)
+        if [ -n "$generic_line" ] && [ "$generic_line" -lt "$launcher_line" ] && [ "$generic_line" -lt "$starter_line" ]; then
+            ok 'restore defers HOME blockers until generic packages finish'
+        else
+            not_ok 'restore defers HOME blockers until generic packages finish'; cat "$fixture/adb.log"
+        fi
+    else
+        not_ok 'restore defers HOME blockers until generic packages finish'; cat "$fixture/out"; cat "$fixture/adb.log"
+    fi
+    rm -rf "$fixture"
+}
+
+test_restore_accepts_firehomestarter_as_launcher_home_equivalent() {
+    new_fixture
+    backup_output=$(run_tool backup)
+    saved_backup=$(printf '%s\n' "$backup_output" | sed -n 's/^BACKUP_DIR=//p')
+    grep -Fvx 'package:com.amazon.tv.launcher' "$fixture/active.packages" |
+        grep -Fvx 'package:com.amazon.firehomestarter' > "$fixture/active.packages.next" || true
+    mv "$fixture/active.packages.next" "$fixture/active.packages"
+    printf 'disabled\n' > "$fixture/amazon-launcher.state"
+    printf 'disabled\n' > "$fixture/firehomestarter.state"
+    printf 'com.spocky.projengmenu/.ui.home.MainActivity\n' > "$fixture/home.state"
+    if FAKE_FIREHOME_RESOLVER_PRIORITY=1 FAKE_REJECT_AMAZON_LAUNCHER_HOME=1 \
+        run_tool --root-helper /data/local/tmp/kara-root-helper \
+        --backup "$saved_backup" --yes restore >"$fixture/out" 2>&1 &&
+        grep -F 'RESTORE_GATE=PASS' "$fixture/out" >/dev/null &&
+        ! grep -F 'set-home-activity --user 0 com.amazon.tv.launcher/.ui.HomeActivity_vNext' "$fixture/adb.log" >/dev/null
+    then
+        ok 'restore accepts Fire Home Starter as the launcher HOME equivalent'
+    else
+        not_ok 'restore accepts Fire Home Starter as the launcher HOME equivalent'; cat "$fixture/out"; cat "$fixture/adb.log"
+    fi
+    rm -rf "$fixture"
+}
+
 test_installs_kara_settings_before_home_switch() {
     new_fixture
     if run_tool --yes apply >"$fixture/out" 2>&1; then
@@ -1210,6 +1278,8 @@ test_home_switch_failure_restores_fire_os_home_blockers
 test_failure_after_home_blocker_removal_reinstalls_it
 test_rollback_fails_when_home_blocker_readback_is_wrong
 test_restore_requires_root_for_backed_up_home_blockers
+test_restore_defers_home_blockers_until_generic_packages_finish
+test_restore_accepts_firehomestarter_as_launcher_home_equivalent
 test_installs_kara_settings_before_home_switch
 test_installs_aurora_before_home_switch
 test_fails_when_aurora_install_has_no_package_effect

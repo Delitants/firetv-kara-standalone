@@ -6,6 +6,7 @@ PROJECTIVY_PACKAGE=com.spocky.projengmenu
 PROJECTIVY_HOME=com.spocky.projengmenu/.ui.home.MainActivity
 AMAZON_HOME_PACKAGE=com.amazon.tv.launcher
 AMAZON_HOME_STARTER_PACKAGE=com.amazon.firehomestarter
+AMAZON_HOME_STARTER_HOME=com.amazon.firehomestarter/.HomeStarterActivity
 PROJECTIVY_CERT_SHA256=f6697bf4082ee97511e4de07863193884a015b7ab5860430321bda1042b0aadd
 AURORA_PACKAGE=com.aurora.store
 AURORA_CERT_SHA256=4c626157ad02bda3401a7263555f68a79663fc3e13a4d4369a12570941aa280f
@@ -952,6 +953,29 @@ verify_device() {
     printf 'VERIFY_GATE=PASS\n'
 }
 
+restore_protected_home_package() {
+    home_blocker=$1
+    grep -Fx "package:$home_blocker" "$packages" >/dev/null || return 0
+    restore_output=$(adb_call shell cmd package install-existing --user 0 "$home_blocker" 2>&1) || {
+        printf '%s\n' "$restore_output" >&2
+        fail "could not restore $home_blocker"
+    }
+    printf '%s\n' "$restore_output"
+    restored_registration=$(device pm list packages --user 0)
+    printf '%s\n' "$restored_registration" | grep -Fx "package:$home_blocker" >/dev/null ||
+        fail "restored package registration is not active: $home_blocker"
+    if grep -Fx "package:$home_blocker" "$disabled" >/dev/null; then
+        root_command "runcon u:r:shell:s0 /system/bin/pm disable --user 0 $home_blocker" >/dev/null ||
+            fail "could not restore disabled state for $home_blocker"
+    else
+        root_command "runcon u:r:shell:s0 /system/bin/pm enable --user 0 $home_blocker" >/dev/null ||
+            fail "could not re-enable $home_blocker"
+    fi
+    restored_registration=$(device pm list packages --user 0)
+    printf '%s\n' "$restored_registration" | grep -Fx "package:$home_blocker" >/dev/null ||
+        fail "restored package did not remain active: $home_blocker"
+}
+
 restore_backup() {
     [ "$assume_yes" -eq 1 ] || fail 'restore requires --yes'
     mutation_identity_gate
@@ -987,26 +1011,7 @@ restore_backup() {
             [ -n "$package_name" ] || continue
             if grep -Fx "package:$package_name" "$packages" >/dev/null; then
                 case "$package_name" in
-                    "$AMAZON_HOME_PACKAGE"|"$AMAZON_HOME_STARTER_PACKAGE")
-                        if [ -n "$root_helper" ]; then
-                            restore_output=$(adb_call shell cmd package install-existing --user 0 "$package_name" 2>&1) || {
-                                printf '%s\n' "$restore_output" >&2
-                                fail "could not restore $package_name"
-                            }
-                            printf '%s\n' "$restore_output"
-                            restored_registration=$(device pm list packages --user 0)
-                            printf '%s\n' "$restored_registration" | grep -Fx "package:$package_name" >/dev/null ||
-                                fail "restored package registration is not active: $package_name"
-                            if grep -Fx "package:$package_name" "$disabled" >/dev/null; then
-                                root_command "runcon u:r:shell:s0 /system/bin/pm disable --user 0 $package_name" >/dev/null ||
-                                    fail "could not restore disabled state for $package_name"
-                            else
-                                root_command "runcon u:r:shell:s0 /system/bin/pm enable --user 0 $package_name" >/dev/null ||
-                                    fail "could not re-enable $package_name"
-                            fi
-                            continue
-                        fi
-                        ;;
+                    "$AMAZON_HOME_PACKAGE"|"$AMAZON_HOME_STARTER_PACKAGE") continue ;;
                 esac
                 adb_call shell cmd package install-existing --user 0 "$package_name" >/dev/null || fail "could not restore $package_name"
                 if grep -Fx "package:$package_name" "$disabled" >/dev/null; then
@@ -1015,8 +1020,19 @@ restore_backup() {
             fi
         done < "$restore_manifest"
     done
+    if [ "$backup_has_home_blocker" -eq 1 ]; then
+        restore_protected_home_package "$AMAZON_HOME_STARTER_PACKAGE"
+        restore_protected_home_package "$AMAZON_HOME_PACKAGE"
+    fi
+    expected_restored_home=$old_home
     if [ -n "$old_home" ]; then
-        if [ -n "$root_helper" ]; then
+        current_restored_home=$(device cmd package resolve-activity --brief --components --user 0 -a android.intent.action.MAIN -c android.intent.category.HOME)
+        if [ "$old_home" = "$AMAZON_HOME_PACKAGE/.ui.HomeActivity_vNext" ] &&
+            [ "$current_restored_home" = "$AMAZON_HOME_STARTER_HOME" ] &&
+            grep -Fx "package:$AMAZON_HOME_STARTER_PACKAGE" "$packages" >/dev/null; then
+            expected_restored_home=$AMAZON_HOME_STARTER_HOME
+            printf 'RESTORED_HOME_EQUIVALENT=%s\n' "$expected_restored_home"
+        elif [ -n "$root_helper" ]; then
             root_command "runcon u:r:shell:s0 /system/bin/cmd package set-home-activity --user 0 $old_home" >/dev/null ||
                 fail 'could not restore the previous HOME activity'
         else
@@ -1051,7 +1067,7 @@ restore_backup() {
     done
     if [ -n "$old_home" ]; then
         restored_home=$(device cmd package resolve-activity --brief --components --user 0 -a android.intent.action.MAIN -c android.intent.category.HOME)
-        [ "$restored_home" = "$old_home" ] || fail "previous HOME was not restored: $restored_home"
+        [ "$restored_home" = "$expected_restored_home" ] || fail "previous HOME was not restored: $restored_home"
     fi
     restored_ota=$(device settings get global ota_disable_automatic_update)
     case "$old_ota" in null|'') [ "$restored_ota" = null ] || fail "OTA preference was not restored: $restored_ota" ;;
