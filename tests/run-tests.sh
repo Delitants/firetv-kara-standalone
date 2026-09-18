@@ -200,8 +200,10 @@ case "$*" in
     shell\ pm\ uninstall\ -k\ --user\ 0\ com.amazon.*)
         package=${7-}
         if [ "$package" = "${FAKE_STICKY_PACKAGE:-}" ]; then printf 'Failure\n'; exit 1; fi
-        grep -Fvx "package:$package" "$FAKE_ACTIVE_PACKAGES" > "$FAKE_ACTIVE_PACKAGES.next" || true
-        mv "$FAKE_ACTIVE_PACKAGES.next" "$FAKE_ACTIVE_PACKAGES"
+        if [ "$package" != "${FAKE_SHELL_NO_EFFECT_PACKAGE:-}" ]; then
+            grep -Fvx "package:$package" "$FAKE_ACTIVE_PACKAGES" > "$FAKE_ACTIVE_PACKAGES.next" || true
+            mv "$FAKE_ACTIVE_PACKAGES.next" "$FAKE_ACTIVE_PACKAGES"
+        fi
         printf 'Success\n' ;;
     shell\ /data/local/tmp/*\ --cmd\ *)
         if [ "$#" -ne 2 ]; then
@@ -252,17 +254,19 @@ case "$*" in
                 grep -Fvx 'package:com.amazon.firehomestarter' "$FAKE_ACTIVE_PACKAGES" > "$FAKE_ACTIVE_PACKAGES.next" || true
                 mv "$FAKE_ACTIVE_PACKAGES.next" "$FAKE_ACTIVE_PACKAGES"
                 printf 'Success\n' ;;
-            *'runcon u:r:shell:s0 /system/bin/cmd package install-existing --user 0 com.amazon.tv.launcher'*)
-                if [ "${FAKE_ROOT_RESTORE_EFFECT:-1}" = 1 ]; then
-                    grep -Fx 'package:com.amazon.tv.launcher' "$FAKE_ACTIVE_PACKAGES" >/dev/null ||
-                        printf 'package:com.amazon.tv.launcher\n' >> "$FAKE_ACTIVE_PACKAGES"
+            *'runcon u:r:shell:s0 /system/bin/pm uninstall -k --user 0 com.amazon.'*)
+                package=$(printf '%s\n' "$*" | sed 's/.* //; s/"$//')
+                if [ "$package" = "${FAKE_ROOT_STICKY_PACKAGE:-}" ]; then printf 'Failure\n'; exit 1; fi
+                if [ "$package" != "${FAKE_ROOT_NO_EFFECT_PACKAGE:-}" ]; then
+                    grep -Fvx "package:$package" "$FAKE_ACTIVE_PACKAGES" > "$FAKE_ACTIVE_PACKAGES.next" || true
+                    mv "$FAKE_ACTIVE_PACKAGES.next" "$FAKE_ACTIVE_PACKAGES"
                 fi
+                printf 'Success\n' ;;
+            *'runcon u:r:shell:s0 /system/bin/cmd package install-existing --user 0 com.amazon.tv.launcher'*)
+                # The live kara package service can return success from the
+                # root-derived context without changing user-0 installation.
                 printf 'Package installed\n' ;;
             *'runcon u:r:shell:s0 /system/bin/cmd package install-existing --user 0 com.amazon.firehomestarter'*)
-                if [ "${FAKE_ROOT_RESTORE_EFFECT:-1}" = 1 ]; then
-                    grep -Fx 'package:com.amazon.firehomestarter' "$FAKE_ACTIVE_PACKAGES" >/dev/null ||
-                        printf 'package:com.amazon.firehomestarter\n' >> "$FAKE_ACTIVE_PACKAGES"
-                fi
                 printf 'Package installed\n' ;;
             *'runcon u:r:shell:s0 /system/bin/pm enable --user 0 com.amazon.tv.launcher'*)
                 printf 'enabled\n' > "$FAKE_AMAZON_LAUNCHER_STATE"
@@ -296,7 +300,13 @@ case "$*" in
     'shell settings put secure block_cec_standby 1') printf '1\n' > "$FAKE_CEC_STATE" ;;
     'shell settings put secure block_cec_standby 0') printf '0\n' > "$FAKE_CEC_STATE" ;;
     'shell settings delete secure block_cec_standby') printf 'null\n' > "$FAKE_CEC_STATE" ;;
-    'shell cmd package install-existing --user 0 com.amazon.'*) printf 'Package installed\n' ;;
+    'shell cmd package install-existing --user 0 com.amazon.'*)
+        package=${7-}
+        if [ "${FAKE_SHELL_RESTORE_EFFECT:-1}" = 1 ]; then
+            grep -Fx "package:$package" "$FAKE_ACTIVE_PACKAGES" >/dev/null ||
+                printf 'package:%s\n' "$package" >> "$FAKE_ACTIVE_PACKAGES"
+        fi
+        printf 'Package installed\n' ;;
     'shell cmd package set-home-activity com.amazon.tv.launcher/.ui.HomeActivity_vNext') : ;;
     *) : ;;
 esac
@@ -839,15 +849,75 @@ test_ssh_bridge_stages_every_local_payload() {
 
 test_fails_when_requested_package_remains_active() {
     new_fixture
-    if FAKE_STICKY_PACKAGE=com.amazon.device.software.ota run_tool --yes apply >"$fixture/out" 2>&1; then
+    if FAKE_STICKY_PACKAGE=com.amazon.device.software.ota \
+        FAKE_ROOT_STICKY_PACKAGE=com.amazon.device.software.ota \
+        run_tool --yes apply >"$fixture/out" 2>&1; then
         not_ok 'fails when requested package remains active'
-    elif grep -F 'removed package is active: com.amazon.device.software.ota' "$fixture/out" >/dev/null &&
+    elif grep -F 'root fallback removal failed: com.amazon.device.software.ota' "$fixture/out" >/dev/null &&
         grep -F 'cmd package install-existing --user 0 com.amazon.device.software.ota' "$fixture/adb.log" >/dev/null &&
         grep -F 'set-home-activity --user 0 com.amazon.tv.launcher/.ui.HomeActivity' "$fixture/adb.log" >/dev/null
     then
         ok 'fails when requested package remains active'
     else
         not_ok 'fails when requested package remains active'; cat "$fixture/out"
+    fi
+    rm -rf "$fixture"
+}
+
+test_root_retries_reviewed_package_left_active_by_shell() {
+    new_fixture
+    printf 'package:com.amazon.aca\n' >> "$fixture/active.packages"
+    printf 'com.amazon.aca\n' >> "$fixture/remove-user0.txt"
+    if FAKE_SHELL_NO_EFFECT_PACKAGE=com.amazon.aca \
+        run_tool --root-helper /data/local/tmp/kara-root-helper --yes apply >"$fixture/out" 2>&1 &&
+        grep -F 'ROOT_FALLBACK_REMOVAL=PASS count=1' "$fixture/out" >/dev/null &&
+        ! grep -Fx 'package:com.amazon.aca' "$fixture/active.packages" >/dev/null
+    then
+        shell_line=$(grep -nFx 'shell pm uninstall -k --user 0 com.amazon.aca' "$fixture/adb.log" | cut -d: -f1)
+        root_line=$(grep -n 'kara-root-helper --cmd .*pm uninstall -k --user 0 com.amazon.aca' "$fixture/adb.log" | cut -d: -f1)
+        if [ -n "$shell_line" ] && [ -n "$root_line" ] && [ "$shell_line" -lt "$root_line" ]; then
+            ok 'root retries a reviewed package left active by shell'
+        else
+            not_ok 'root retries a reviewed package left active by shell'; cat "$fixture/adb.log"
+        fi
+    else
+        not_ok 'root retries a reviewed package left active by shell'; cat "$fixture/out"; cat "$fixture/adb.log"
+    fi
+    rm -rf "$fixture"
+}
+
+test_rejects_root_uninstall_success_without_package_effect() {
+    new_fixture
+    printf 'package:com.amazon.aca\n' >> "$fixture/active.packages"
+    printf 'com.amazon.aca\n' >> "$fixture/remove-user0.txt"
+    if FAKE_SHELL_NO_EFFECT_PACKAGE=com.amazon.aca \
+        FAKE_ROOT_NO_EFFECT_PACKAGE=com.amazon.aca \
+        run_tool --root-helper /data/local/tmp/kara-root-helper --yes apply >"$fixture/out" 2>&1; then
+        not_ok 'rejects root uninstall success without package effect'
+    elif grep -F 'removed package is active after root fallback: com.amazon.aca' "$fixture/out" >/dev/null &&
+        grep -F 'AUTOMATIC_ROLLBACK=PASS' "$fixture/out" >/dev/null &&
+        grep -E 'kara-root-helper --cmd .*pm uninstall -k --user 0 com[.]amazon[.]aca' "$fixture/adb.log" >/dev/null
+    then
+        ok 'rejects root uninstall success without package effect'
+    else
+        not_ok 'rejects root uninstall success without package effect'; cat "$fixture/out"; cat "$fixture/adb.log"
+    fi
+    rm -rf "$fixture"
+}
+
+test_rejects_unsafe_package_before_root_fallback_interpolation() {
+    new_fixture
+    printf 'package:com.amazon.aca;id\n' >> "$fixture/active.packages"
+    printf 'com.amazon.aca;id\n' >> "$fixture/remove-user0.txt"
+    if FAKE_STICKY_PACKAGE='com.amazon.aca;id' \
+        run_tool --root-helper /data/local/tmp/kara-root-helper --yes apply >"$fixture/out" 2>&1; then
+        not_ok 'rejects unsafe package before root fallback interpolation'
+    elif grep -F 'unsafe package in manifest: com.amazon.aca;id' "$fixture/out" >/dev/null &&
+        ! grep -F 'pm uninstall -k --user 0 com.amazon.aca;id' "$fixture/adb.log" >/dev/null
+    then
+        ok 'rejects unsafe package before root fallback interpolation'
+    else
+        not_ok 'rejects unsafe package before root fallback interpolation'; cat "$fixture/out"; cat "$fixture/adb.log"
     fi
     rm -rf "$fixture"
 }
@@ -921,7 +991,7 @@ test_failure_after_home_blocker_removal_reinstalls_it() {
         [ "$(cat "$fixture/firehomestarter.state")" = enabled ]
     then
         remove_line=$(grep -n 'pm uninstall -k --user 0 com.amazon.tv.launcher' "$fixture/adb.log" | head -n 1 | cut -d: -f1)
-        install_line=$(grep -n 'cmd package install-existing --user 0 com.amazon.tv.launcher' "$fixture/adb.log" | tail -n 1 | cut -d: -f1)
+        install_line=$(grep -nFx 'shell cmd package install-existing --user 0 com.amazon.tv.launcher' "$fixture/adb.log" | cut -d: -f1)
         enable_line=$(grep -n 'pm enable --user 0 com.amazon.tv.launcher' "$fixture/adb.log" | tail -n 1 | cut -d: -f1)
         if [ -n "$remove_line" ] && [ "$remove_line" -lt "$install_line" ] && [ "$install_line" -lt "$enable_line" ]; then
             ok 'failure after HOME blocker removal reinstalls it'
@@ -936,7 +1006,7 @@ test_failure_after_home_blocker_removal_reinstalls_it() {
 
 test_rollback_fails_when_home_blocker_readback_is_wrong() {
     new_fixture
-    if FAKE_ROOT_UNINSTALL_FAIL_PACKAGE=com.amazon.firehomestarter FAKE_ROOT_RESTORE_EFFECT=0 \
+    if FAKE_ROOT_UNINSTALL_FAIL_PACKAGE=com.amazon.firehomestarter FAKE_SHELL_RESTORE_EFFECT=0 \
         run_tool --root-helper /data/local/tmp/kara-root-helper --yes apply >"$fixture/out" 2>&1; then
         not_ok 'rollback fails when HOME blocker readback is wrong'
     elif grep -F 'AUTOMATIC_ROLLBACK=FAIL' "$fixture/out" >/dev/null &&
@@ -1144,6 +1214,9 @@ test_installs_kara_settings_before_home_switch
 test_installs_aurora_before_home_switch
 test_fails_when_aurora_install_has_no_package_effect
 test_fails_when_requested_package_remains_active
+test_root_retries_reviewed_package_left_active_by_shell
+test_rejects_root_uninstall_success_without_package_effect
+test_rejects_unsafe_package_before_root_fallback_interpolation
 test_uses_explicit_root_helper_for_protected_package
 test_resumes_verified_root_helper_while_selinux_is_permissive
 test_rejects_root_helper_that_is_not_daemon_parent

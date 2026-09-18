@@ -44,6 +44,9 @@ uses the proven root helper to disable both blockers, verifies Projectivy as
 HOME, and only then removes the blockers for user 0. If that transition fails,
 automatic rollback reinstalls and re-enables the blockers according to the
 backup and restores the previous HOME before reporting success or failure.
+For every other reviewed package, `apply` first tries the ordinary ADB shell
+uninstall. If Fire OS leaves it active, the script retries that exact manifest
+package through the proven root helper and requires an absent readback.
 
 ## OTA boundary
 
@@ -88,9 +91,13 @@ printing `RESTORE_GATE=PASS`.
 
 Backups containing `com.amazon.tv.launcher` or `com.amazon.firehomestarter`
 require the exact still-live root helper because Fire OS protects these package
-state changes. If a reboot destroyed temporary root, do not attempt a rootless
-restore: obtain fresh temporary root for the exact supported build first, then
-run the command above with that daemon path.
+state changes. Restore registers those packages for user 0 from the ordinary
+ADB shell context, verifies that registration immediately, and then uses root
+only to restore the protected enabled state and HOME selection. This split is
+intentional: on kara, the root-derived package-manager context can report
+success without changing user-0 registration. If a reboot destroyed temporary
+root, do not attempt a rootless restore: obtain fresh temporary root for the
+exact supported build first, then run the command above with that daemon path.
 
 Projectivy, Aurora Store, and Kara Settings remain installed after this package
 state rollback. Remove them only after a working HOME and Settings path have

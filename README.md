@@ -195,7 +195,9 @@ The order is fail-closed:
 8. Direct-start Projectivy, root-disable both higher-priority Fire OS HOME
    blockers (`com.amazon.tv.launcher` and `com.amazon.firehomestarter`), set and
    read back Projectivy as HOME, then root-remove those blockers before removing
-   the remaining reviewed Amazon packages for user 0.
+   the remaining reviewed Amazon packages for user 0. Any reviewed package that
+   an ordinary shell uninstall leaves active is retried through the proven root
+   helper and read back before the workflow continues.
 9. Set the OTA preference and verify the complete result.
 
 `--root-helper /data/local/tmp/NAME` remains available for advanced recovery.
@@ -223,9 +225,11 @@ For a USB bridge, add `--bridge root@LINUX_HOST --serial USB_SERIAL`. Restore
 reinstalls only packages that were present in that backup and restores their
 disabled state, HOME, OTA preference, and CEC guard, then reads all of that state
 back before reporting success. A backup containing the protected Fire OS HOME
-packages requires the still-live, verified root helper; rootless restore is
-refused. If the daemon was lost to a reboot, obtain a fresh exact-build temporary
-root before restoring. Restore does not flash firmware.
+packages is registered for user 0 through the ordinary ADB shell context, then
+uses the still-live, verified root helper only for their protected enabled state
+and HOME selection. Rootless restore is refused. If the daemon was lost to a
+reboot, obtain a fresh exact-build temporary root before restoring. Restore does
+not flash firmware.
 
 ## Complete exploit source
 

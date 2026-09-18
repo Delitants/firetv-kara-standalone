@@ -761,13 +761,19 @@ test_newer() {
     fail 'experimental newer-firmware root was not obtained; reboot restores the stock security state'
 }
 
+validate_amazon_package() {
+    package_name=$1
+    case "$package_name" in com.amazon.*|amazon.*) : ;; *) fail "unsafe package in manifest: $package_name" ;; esac
+    case "$package_name" in *[!A-Za-z0-9._-]*) fail "unsafe package in manifest: $package_name" ;; esac
+}
+
 remove_privileged_packages() {
     [ -n "$root_helper" ] || { printf 'PRIVILEGED_REMOVAL=SKIPPED no root helper supplied\n'; return; }
     printf '%s\n' "$root_helper" | grep -Eq '^/data/local/tmp/[A-Za-z0-9._-]+$' || fail 'unsafe root-helper path'
     [ -r "$privileged_manifest" ] || fail 'privileged package manifest is missing'
     while IFS= read -r package_name; do
         [ -n "$package_name" ] || continue
-        case "$package_name" in com.amazon.*|amazon.*) : ;; *) fail "unsafe privileged package: $package_name" ;; esac
+        validate_amazon_package "$package_name"
         fixed_command="runcon u:r:shell:s0 /system/bin/pm uninstall -k --user 0 $package_name"
         device "$root_helper --cmd \"$fixed_command\"" >/dev/null || fail "privileged removal failed: $package_name"
     done < "$privileged_manifest"
@@ -785,6 +791,44 @@ root_command() {
     fixed_command=$1
     [ -n "$root_helper" ] || fail 'temporary root helper is required'
     device "$root_helper --cmd \"$fixed_command\""
+}
+
+remove_reviewed_packages() {
+    [ -r "$manifest" ] || fail 'package removal manifest is missing'
+    while IFS= read -r package_name; do
+        [ -n "$package_name" ] || continue
+        validate_amazon_package "$package_name"
+        case "$package_name" in
+            "$AMAZON_HOME_PACKAGE"|"$AMAZON_HOME_STARTER_PACKAGE") continue ;;
+        esac
+        adb_call shell pm uninstall -k --user 0 "$package_name" >/dev/null || true
+    done < "$manifest"
+
+    active=$(device pm list packages --user 0)
+    root_fallback_count=0
+    while IFS= read -r package_name; do
+        [ -n "$package_name" ] || continue
+        validate_amazon_package "$package_name"
+        case "$package_name" in
+            "$AMAZON_HOME_PACKAGE"|"$AMAZON_HOME_STARTER_PACKAGE") continue ;;
+        esac
+        if printf '%s\n' "$active" | grep -Fx "package:$package_name" >/dev/null; then
+            remove_output=$(root_command "runcon u:r:shell:s0 /system/bin/pm uninstall -k --user 0 $package_name") ||
+                fail "root fallback removal failed: $package_name"
+            printf '%s\n' "$remove_output" | tr -d '\r' | tail -n 1 | grep -Fx Success >/dev/null ||
+                fail "root fallback removal did not report Success: $package_name"
+            root_fallback_count=$((root_fallback_count + 1))
+        fi
+    done < "$manifest"
+
+    active=$(device pm list packages --user 0)
+    while IFS= read -r package_name; do
+        [ -n "$package_name" ] || continue
+        if printf '%s\n' "$active" | grep -Fx "package:$package_name" >/dev/null; then
+            fail "removed package is active after root fallback: $package_name"
+        fi
+    done < "$manifest"
+    printf 'ROOT_FALLBACK_REMOVAL=PASS count=%s\n' "$root_fallback_count"
 }
 
 disable_fire_os_home_blocker() {
@@ -850,15 +894,7 @@ apply_changes() {
     install_aurora
     install_kara_settings
     activate_projectivy_home
-    [ -r "$manifest" ] || fail 'package removal manifest is missing'
-    while IFS= read -r package_name; do
-        [ -n "$package_name" ] || continue
-        case "$package_name" in com.amazon.*|amazon.*) : ;; *) fail "unsafe package in manifest: $package_name" ;; esac
-        case "$package_name" in
-            "$AMAZON_HOME_PACKAGE"|"$AMAZON_HOME_STARTER_PACKAGE") continue ;;
-        esac
-        adb_call shell pm uninstall -k --user 0 "$package_name" >/dev/null || true
-    done < "$manifest"
+    remove_reviewed_packages
     remove_privileged_packages
     adb_call shell settings put global ota_disable_automatic_update 1
     verify_device
@@ -953,8 +989,14 @@ restore_backup() {
                 case "$package_name" in
                     "$AMAZON_HOME_PACKAGE"|"$AMAZON_HOME_STARTER_PACKAGE")
                         if [ -n "$root_helper" ]; then
-                            root_command "runcon u:r:shell:s0 /system/bin/cmd package install-existing --user 0 $package_name" >/dev/null ||
+                            restore_output=$(adb_call shell cmd package install-existing --user 0 "$package_name" 2>&1) || {
+                                printf '%s\n' "$restore_output" >&2
                                 fail "could not restore $package_name"
+                            }
+                            printf '%s\n' "$restore_output"
+                            restored_registration=$(device pm list packages --user 0)
+                            printf '%s\n' "$restored_registration" | grep -Fx "package:$package_name" >/dev/null ||
+                                fail "restored package registration is not active: $package_name"
                             if grep -Fx "package:$package_name" "$disabled" >/dev/null; then
                                 root_command "runcon u:r:shell:s0 /system/bin/pm disable --user 0 $package_name" >/dev/null ||
                                     fail "could not restore disabled state for $package_name"
