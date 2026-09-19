@@ -126,6 +126,9 @@ EOF
 set -eu
 printf '%s\n' "$*" >> "$FAKE_ADB_LOG"
 if [ "${1-}" = -s ]; then shift 2; fi
+if [ "${FAKE_ADB_DRAIN_STDIN:-0}" = 1 ] && [ "${1-}" = shell ]; then
+    cat >/dev/null
+fi
 case "$*" in
     get-state) printf 'device\n' ;;
     'shell getprop ro.product.device') printf '%s\n' "${FAKE_DEVICE:-kara}" ;;
@@ -977,6 +980,27 @@ test_removal_trace_rejects_non_apply_command() {
     rm -rf "$fixture"
 }
 
+test_adb_shell_cannot_consume_the_remaining_manifest() {
+    new_fixture
+    printf 'package:com.amazon.aca\npackage:com.amazon.adep\n' >> "$fixture/active.packages"
+    printf 'com.amazon.aca\ncom.amazon.adep\n' >> "$fixture/remove-user0.txt"
+    if FAKE_ADB_DRAIN_STDIN=1 \
+        FAKE_SHELL_NO_EFFECT_PACKAGES='com.amazon.aca com.amazon.adep' \
+        run_tool --root-helper /data/local/tmp/kara-root-helper --trace-removals --yes apply \
+        </dev/null >"$fixture/out" 2>&1 &&
+        grep -F 'phase=shell package=com.amazon.adep ' "$fixture/out" >/dev/null &&
+        grep -F 'phase=root package=com.amazon.adep ' "$fixture/out" >/dev/null &&
+        grep -F 'APPLY_GATE=PASS' "$fixture/out" >/dev/null &&
+        ! grep -Fx 'package:com.amazon.aca' "$fixture/active.packages" >/dev/null &&
+        ! grep -Fx 'package:com.amazon.adep' "$fixture/active.packages" >/dev/null
+    then
+        ok 'ADB shell cannot consume later manifest entries during either removal pass'
+    else
+        not_ok 'ADB shell cannot consume later manifest entries during either removal pass'; cat "$fixture/out"
+    fi
+    rm -rf "$fixture"
+}
+
 test_rejects_unsafe_package_before_root_fallback_interpolation() {
     new_fixture
     printf 'package:com.amazon.aca;id\n' >> "$fixture/active.packages"
@@ -1346,6 +1370,7 @@ test_root_retries_reviewed_package_left_active_by_shell
 test_rejects_root_uninstall_success_without_package_effect
 test_removal_trace_distinguishes_never_removed_from_later_reappearance
 test_removal_trace_rejects_non_apply_command
+test_adb_shell_cannot_consume_the_remaining_manifest
 test_rejects_unsafe_package_before_root_fallback_interpolation
 test_uses_explicit_root_helper_for_protected_package
 test_resumes_verified_root_helper_while_selinux_is_permissive

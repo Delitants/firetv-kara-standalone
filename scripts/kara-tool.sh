@@ -212,7 +212,9 @@ remote_adb() {
 
 adb_call() {
     if [ -n "$serial" ]; then set -- -s "$serial" "$@"; fi
-    if [ -n "$bridge" ]; then remote_adb adb "$@"; else "$ADB" "$@"; fi
+    # ADB shell reads stdin by default. Never let it drain a manifest being
+    # read by an enclosing while loop (or the same loop during rollback).
+    if [ -n "$bridge" ]; then remote_adb adb "$@" </dev/null; else "$ADB" "$@" </dev/null; fi
 }
 
 stage_bridge_file() {
