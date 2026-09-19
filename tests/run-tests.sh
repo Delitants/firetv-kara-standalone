@@ -204,7 +204,11 @@ case "$*" in
     shell\ pm\ uninstall\ -k\ --user\ 0\ com.amazon.*)
         package=${7-}
         if [ "$package" = "${FAKE_STICKY_PACKAGE:-}" ]; then printf 'Failure\n'; exit 1; fi
-        if [ "$package" != "${FAKE_SHELL_NO_EFFECT_PACKAGE:-}" ]; then
+        case " ${FAKE_SHELL_NO_EFFECT_PACKAGES:-} " in
+            *" $package "*) shell_no_effect=1 ;;
+            *) shell_no_effect=0 ;;
+        esac
+        if [ "$package" != "${FAKE_SHELL_NO_EFFECT_PACKAGE:-}" ] && [ "$shell_no_effect" -eq 0 ]; then
             grep -Fvx "package:$package" "$FAKE_ACTIVE_PACKAGES" > "$FAKE_ACTIVE_PACKAGES.next" || true
             mv "$FAKE_ACTIVE_PACKAGES.next" "$FAKE_ACTIVE_PACKAGES"
         fi
@@ -264,6 +268,9 @@ case "$*" in
                 if [ "$package" != "${FAKE_ROOT_NO_EFFECT_PACKAGE:-}" ]; then
                     grep -Fvx "package:$package" "$FAKE_ACTIVE_PACKAGES" > "$FAKE_ACTIVE_PACKAGES.next" || true
                     mv "$FAKE_ACTIVE_PACKAGES.next" "$FAKE_ACTIVE_PACKAGES"
+                fi
+                if [ "$package" = "${FAKE_ROOT_READD_ADEP_AFTER_PACKAGE:-}" ]; then
+                    printf 'package:com.amazon.adep\n' >> "$FAKE_ACTIVE_PACKAGES"
                 fi
                 printf 'Success\n' ;;
             *'runcon u:r:shell:s0 /system/bin/cmd package install-existing --user 0 com.amazon.tv.launcher'*)
@@ -919,6 +926,57 @@ test_rejects_root_uninstall_success_without_package_effect() {
     rm -rf "$fixture"
 }
 
+test_removal_trace_distinguishes_never_removed_from_later_reappearance() {
+    new_fixture
+    printf 'package:com.amazon.adep\n' >> "$fixture/active.packages"
+    printf 'com.amazon.adep\n' >> "$fixture/remove-user0.txt"
+    if FAKE_SHELL_NO_EFFECT_PACKAGE=com.amazon.adep \
+        FAKE_ROOT_NO_EFFECT_PACKAGE=com.amazon.adep \
+        run_tool --root-helper /data/local/tmp/kara-root-helper --trace-removals --yes apply >"$fixture/out" 2>&1; then
+        not_ok 'removal trace distinguishes a root uninstall with no effect'
+    elif grep -E '^REMOVAL_TRACE time=[^ ]+ phase=root package=com[.]amazon[.]adep adep=ACTIVE transition=UNCHANGED$' "$fixture/out" >/dev/null &&
+        ! grep -F 'transition=ABSENT_TO_ACTIVE' "$fixture/out" >/dev/null &&
+        grep -F 'AUTOMATIC_ROLLBACK=PASS' "$fixture/out" >/dev/null
+    then
+        ok 'removal trace distinguishes a root uninstall with no effect'
+    else
+        not_ok 'removal trace distinguishes a root uninstall with no effect'; cat "$fixture/out"
+    fi
+    rm -rf "$fixture"
+
+    new_fixture
+    printf 'package:com.amazon.adep\npackage:com.amazon.trigger\n' >> "$fixture/active.packages"
+    printf 'com.amazon.adep\ncom.amazon.trigger\n' >> "$fixture/remove-user0.txt"
+    if FAKE_SHELL_NO_EFFECT_PACKAGES='com.amazon.adep com.amazon.trigger' \
+        FAKE_ROOT_READD_ADEP_AFTER_PACKAGE=com.amazon.trigger \
+        run_tool --root-helper /data/local/tmp/kara-root-helper --trace-removals --yes apply >"$fixture/out" 2>&1; then
+        not_ok 'removal trace locates the first observed ADEP reappearance'
+    elif grep -E '^REMOVAL_TRACE time=[^ ]+ phase=root package=com[.]amazon[.]adep adep=ABSENT transition=ACTIVE_TO_ABSENT$' "$fixture/out" >/dev/null &&
+        grep -E '^REMOVAL_TRACE time=[^ ]+ phase=root package=com[.]amazon[.]trigger adep=ACTIVE transition=ABSENT_TO_ACTIVE$' "$fixture/out" >/dev/null &&
+        grep -F 'removed package is active after root fallback: com.amazon.adep' "$fixture/out" >/dev/null &&
+        grep -F 'AUTOMATIC_ROLLBACK=PASS' "$fixture/out" >/dev/null
+    then
+        ok 'removal trace locates the first observed ADEP reappearance'
+    else
+        not_ok 'removal trace locates the first observed ADEP reappearance'; cat "$fixture/out"
+    fi
+    rm -rf "$fixture"
+}
+
+test_removal_trace_rejects_non_apply_command() {
+    new_fixture
+    if run_tool --trace-removals audit >"$fixture/out" 2>&1; then
+        not_ok 'removal trace is limited to apply'
+    elif grep -F -- '--trace-removals is only valid with apply' "$fixture/out" >/dev/null &&
+        [ ! -s "$fixture/adb.log" ]
+    then
+        ok 'removal trace is limited to apply'
+    else
+        not_ok 'removal trace is limited to apply'; cat "$fixture/out"; cat "$fixture/adb.log"
+    fi
+    rm -rf "$fixture"
+}
+
 test_rejects_unsafe_package_before_root_fallback_interpolation() {
     new_fixture
     printf 'package:com.amazon.aca;id\n' >> "$fixture/active.packages"
@@ -1286,6 +1344,8 @@ test_fails_when_aurora_install_has_no_package_effect
 test_fails_when_requested_package_remains_active
 test_root_retries_reviewed_package_left_active_by_shell
 test_rejects_root_uninstall_success_without_package_effect
+test_removal_trace_distinguishes_never_removed_from_later_reappearance
+test_removal_trace_rejects_non_apply_command
 test_rejects_unsafe_package_before_root_fallback_interpolation
 test_uses_explicit_root_helper_for_protected_package
 test_resumes_verified_root_helper_while_selinux_is_permissive

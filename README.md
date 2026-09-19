@@ -197,7 +197,8 @@ The order is fail-closed:
    read back Projectivy as HOME, then root-remove those blockers before removing
    the remaining reviewed Amazon packages for user 0. Any reviewed package that
    an ordinary shell uninstall leaves active is retried through the proven root
-   helper and read back before the workflow continues.
+   helper; the full removal manifest is then read back before the workflow
+   continues.
 9. Set the OTA preference and verify the complete result.
 
 `--root-helper /data/local/tmp/NAME` remains available for advanced recovery.
@@ -207,6 +208,34 @@ keep the Stick powered until `apply` finishes. See
 [`docs/RECOVERY.md`](docs/RECOVERY.md) for the exact command and OTA safeguards.
 If an older checkout reports that Amazon's launcher remained HOME, leave the
 root daemon running, update the repository, and rerun this same resume command.
+
+### Trace an ADEP removal failure
+
+`--trace-removals` is an opt-in diagnostic for `apply`, not a dry run. It adds
+package-state reads before removal, after each ordinary and root removal
+attempt, and at the final removal gate. Each `REMOVAL_TRACE` line contains a
+controller UTC timestamp, the phase and package just processed, ADEP's user-0
+state, and its observed transition. `ACTIVE_TO_ABSENT` followed by
+`ABSENT_TO_ACTIVE` identifies the first read *after* reappearance; it does not
+by itself prove which service or operation caused it. If ADEP remains `ACTIVE`
+after its root removal attempt, it was never observed absent in that run.
+
+Use this only with the exact supported build and the usual backup and rollback
+precautions. It still performs the full mutating `apply` and makes extra ADB
+reads; it does not retry or change removal decisions. For an existing verified
+root daemon, replace `HELPER_NAME` with its exact device path:
+
+```sh
+./scripts/kara-tool.sh \
+  --serial FIRE_TV_IP:5555 \
+  --root-helper /data/local/tmp/HELPER_NAME \
+  --trace-removals \
+  --yes apply > kara-apply-trace.log 2>&1
+```
+
+Keep the printed `BACKUP_DIR`, and inspect the complete log for
+`AUTOMATIC_ROLLBACK=PASS` if `apply` fails. Do not assume rollback succeeded
+merely because a trace line was printed.
 
 ## Restore the backup
 

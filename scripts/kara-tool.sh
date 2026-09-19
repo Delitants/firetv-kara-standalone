@@ -47,6 +47,8 @@ backup_dir=
 root_helper=
 assume_yes=0
 accept_watchdog_reboot=0
+trace_removals=0
+trace_adep_previous=
 newer_build=
 temp_dir=
 current_backup=
@@ -167,6 +169,7 @@ Options:
   --newer-build BUILD    Exact 13-digit newer build shown by the target
   --accept-watchdog-reboot
                          Required for test-newer; the Stick may reboot
+  --trace-removals       Trace ADEP state after each apply removal attempt
   --yes                  Required for mutating or experimental commands
 EOF
 }
@@ -181,6 +184,7 @@ while [ "$#" -gt 0 ]; do
         --root-helper) [ "$#" -ge 2 ] || fail '--root-helper needs a device path'; root_helper=$2; shift 2 ;;
         --newer-build) [ "$#" -ge 2 ] || fail '--newer-build needs a value'; newer_build=$2; shift 2 ;;
         --accept-watchdog-reboot) accept_watchdog_reboot=1; shift ;;
+        --trace-removals) trace_removals=1; shift ;;
         --yes) assume_yes=1; shift ;;
         -h|--help) usage; exit 0 ;;
         -*) fail "unknown option: $1" ;;
@@ -189,6 +193,7 @@ while [ "$#" -gt 0 ]; do
 done
 [ "${command_name-}" ] || { usage >&2; exit 2; }
 [ "$#" -eq 0 ] || fail 'unexpected positional arguments'
+[ "$trace_removals" -eq 0 ] || [ "$command_name" = apply ] || fail '--trace-removals is only valid with apply'
 if [ -n "$bridge" ]; then
     printf '%s\n' "$bridge" | grep -Eq '^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+$' || fail 'unsafe SSH bridge name'
 fi
@@ -794,8 +799,35 @@ root_command() {
     device "$root_helper --cmd \"$fixed_command\""
 }
 
+trace_adep_state() {
+    [ "$trace_removals" -eq 1 ] || return 0
+    trace_phase=$1
+    trace_package=$2
+    if [ "$#" -ge 3 ]; then
+        trace_active=$3
+    else
+        trace_active=$(device pm list packages --user 0) || fail "removal trace readback failed after $trace_package"
+    fi
+    if printf '%s\n' "$trace_active" | grep -Fx 'package:com.amazon.adep' >/dev/null; then
+        trace_adep_current=ACTIVE
+    else
+        trace_adep_current=ABSENT
+    fi
+    case "$trace_adep_previous:$trace_adep_current" in
+        ACTIVE:ABSENT) trace_transition=ACTIVE_TO_ABSENT ;;
+        ABSENT:ACTIVE) trace_transition=ABSENT_TO_ACTIVE ;;
+        :*) trace_transition=INITIAL ;;
+        *) trace_transition=UNCHANGED ;;
+    esac
+    printf 'REMOVAL_TRACE time=%s phase=%s package=%s adep=%s transition=%s\n' \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$trace_phase" "$trace_package" \
+        "$trace_adep_current" "$trace_transition"
+    trace_adep_previous=$trace_adep_current
+}
+
 remove_reviewed_packages() {
     [ -r "$manifest" ] || fail 'package removal manifest is missing'
+    trace_adep_state initial none
     while IFS= read -r package_name; do
         [ -n "$package_name" ] || continue
         validate_amazon_package "$package_name"
@@ -803,6 +835,7 @@ remove_reviewed_packages() {
             "$AMAZON_HOME_PACKAGE"|"$AMAZON_HOME_STARTER_PACKAGE") continue ;;
         esac
         adb_call shell pm uninstall -k --user 0 "$package_name" >/dev/null || true
+        trace_adep_state shell "$package_name"
     done < "$manifest"
 
     active=$(device pm list packages --user 0)
@@ -819,10 +852,12 @@ remove_reviewed_packages() {
             printf '%s\n' "$remove_output" | tr -d '\r' | tail -n 1 | grep -Fx Success >/dev/null ||
                 fail "root fallback removal did not report Success: $package_name"
             root_fallback_count=$((root_fallback_count + 1))
+            trace_adep_state root "$package_name"
         fi
     done < "$manifest"
 
     active=$(device pm list packages --user 0)
+    trace_adep_state final none "$active"
     while IFS= read -r package_name; do
         [ -n "$package_name" ] || continue
         if printf '%s\n' "$active" | grep -Fx "package:$package_name" >/dev/null; then
