@@ -1066,8 +1066,15 @@ restore_backup() {
         current_restored_home=$(device cmd package resolve-activity --brief --components --user 0 -a android.intent.action.MAIN -c android.intent.category.HOME)
         if [ "$old_home" = "$AMAZON_HOME_PACKAGE/.ui.HomeActivity_vNext" ] &&
             [ "$current_restored_home" = "$AMAZON_HOME_STARTER_HOME" ] &&
+            grep -Fx "package:$AMAZON_HOME_PACKAGE" "$packages" >/dev/null &&
             grep -Fx "package:$AMAZON_HOME_STARTER_PACKAGE" "$packages" >/dev/null; then
             expected_restored_home=$AMAZON_HOME_STARTER_HOME
+            printf 'RESTORED_HOME_EQUIVALENT=%s\n' "$expected_restored_home"
+        elif [ "$old_home" = "$AMAZON_HOME_STARTER_HOME" ] &&
+            [ "$current_restored_home" = "$AMAZON_HOME_PACKAGE/.ui.HomeActivity_vNext" ] &&
+            grep -Fx "package:$AMAZON_HOME_PACKAGE" "$packages" >/dev/null &&
+            grep -Fx "package:$AMAZON_HOME_STARTER_PACKAGE" "$packages" >/dev/null; then
+            expected_restored_home=$current_restored_home
             printf 'RESTORED_HOME_EQUIVALENT=%s\n' "$expected_restored_home"
         elif [ -n "$root_helper" ]; then
             root_command "runcon u:r:shell:s0 /system/bin/cmd package set-home-activity --user 0 $old_home" >/dev/null ||

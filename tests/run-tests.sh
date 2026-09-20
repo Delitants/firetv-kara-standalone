@@ -295,6 +295,9 @@ case "$*" in
                 }
                 printf 'com.amazon.tv.launcher/.ui.HomeActivity_vNext\n' > "$FAKE_HOME_STATE"
                 printf 'Success\n' ;;
+            *'runcon u:r:shell:s0 /system/bin/cmd package set-home-activity --user 0 com.amazon.firehomestarter/.HomeStarterActivity'*)
+                printf 'com.amazon.firehomestarter/.HomeStarterActivity\n' > "$FAKE_HOME_STATE"
+                printf 'Success\n' ;;
             *'id; cat /data/local/tmp/kara-root-ready'*)
                 printf '%s\n' "${FAKE_ROOT_ID_LINE:-uid=0(root) gid=0(root) context=u:r:kernel:s0}"
                 current_build=$(cat "$FAKE_BUILD_STATE")
@@ -1185,6 +1188,47 @@ test_restore_accepts_firehomestarter_as_launcher_home_equivalent() {
     rm -rf "$fixture"
 }
 
+test_restore_accepts_launcher_as_firehomestarter_home_equivalent() {
+    new_fixture
+    backup_output=$(FAKE_FIREHOME_RESOLVER_PRIORITY=1 run_tool backup)
+    saved_backup=$(printf '%s\n' "$backup_output" | sed -n 's/^BACKUP_DIR=//p')
+    if run_tool --root-helper /data/local/tmp/kara-root-helper \
+        --backup "$saved_backup" --yes restore >"$fixture/out" 2>&1 &&
+        grep -F 'RESTORED_HOME_EQUIVALENT=com.amazon.tv.launcher/.ui.HomeActivity_vNext' "$fixture/out" >/dev/null &&
+        grep -F 'RESTORE_GATE=PASS' "$fixture/out" >/dev/null &&
+        ! grep -F 'set-home-activity --user 0 com.amazon.firehomestarter/.HomeStarterActivity' "$fixture/adb.log" >/dev/null
+    then
+        ok 'restore accepts Amazon Launcher as the Fire Home Starter HOME equivalent'
+    else
+        not_ok 'restore accepts Amazon Launcher as the Fire Home Starter HOME equivalent'
+        cat "$fixture/out"
+        cat "$fixture/adb.log"
+    fi
+    rm -rf "$fixture"
+}
+
+test_restore_rejects_launcher_equivalence_when_launcher_was_not_backed_up() {
+    new_fixture
+    grep -Fvx 'package:com.amazon.tv.launcher' "$fixture/active.packages" > "$fixture/active.packages.next" || true
+    mv "$fixture/active.packages.next" "$fixture/active.packages"
+    backup_output=$(FAKE_FIREHOME_RESOLVER_PRIORITY=1 run_tool backup)
+    saved_backup=$(printf '%s\n' "$backup_output" | sed -n 's/^BACKUP_DIR=//p')
+    printf 'package:com.amazon.tv.launcher\n' >> "$fixture/active.packages"
+    if run_tool --root-helper /data/local/tmp/kara-root-helper \
+        --backup "$saved_backup" --yes restore >"$fixture/out" 2>&1
+    then
+        not_ok 'restore rejects an unbacked Amazon Launcher as HOME equivalent'
+    elif grep -F 'FAIL: previous HOME was not restored: com.amazon.tv.launcher/.ui.HomeActivity_vNext' "$fixture/out" >/dev/null &&
+        ! grep -F 'RESTORED_HOME_EQUIVALENT=' "$fixture/out" >/dev/null
+    then
+        ok 'restore rejects an unbacked Amazon Launcher as HOME equivalent'
+    else
+        not_ok 'restore rejects an unbacked Amazon Launcher as HOME equivalent'
+        cat "$fixture/out"
+    fi
+    rm -rf "$fixture"
+}
+
 test_installs_kara_settings_before_home_switch() {
     new_fixture
     if run_tool --yes apply >"$fixture/out" 2>&1; then
@@ -1362,6 +1406,8 @@ test_rollback_fails_when_home_blocker_readback_is_wrong
 test_restore_requires_root_for_backed_up_home_blockers
 test_restore_defers_home_blockers_until_generic_packages_finish
 test_restore_accepts_firehomestarter_as_launcher_home_equivalent
+test_restore_accepts_launcher_as_firehomestarter_home_equivalent
+test_restore_rejects_launcher_equivalence_when_launcher_was_not_backed_up
 test_installs_kara_settings_before_home_switch
 test_installs_aurora_before_home_switch
 test_fails_when_aurora_install_has_no_package_effect
