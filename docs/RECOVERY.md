@@ -40,13 +40,17 @@ empty directories, the script removes only the empty live directory with
 
 Fire OS gives its launcher and Home Starter higher HOME resolver priorities
 than an installed launcher. Current `apply` verifies that Projectivy starts,
-uses the proven root helper to disable both blockers, verifies Projectivy as
-HOME, and only then removes the blockers for user 0. If that transition fails,
-automatic rollback reinstalls and re-enables the blockers according to the
-backup and restores the previous HOME before reporting success or failure.
-For every other reviewed package, `apply` first tries the ordinary ADB shell
-uninstall. If Fire OS leaves it active, the script retries that exact manifest
-package through the proven root helper and requires an absent readback.
+uses the proven root helper to disable only Amazon launcher's HOME activity and
+the Home Starter package, verifies Projectivy as HOME, and removes only Home
+Starter. The launcher package remains active as the privileged bridge to stock
+Display & Sounds and the rest of Fire TV Settings. Its verified support set
+includes ADEP, Audio Home, Ceviche, DCP, device messaging, the device-sale
+provider, Fire TV Screensaver, Vizzini, and WHA Settings. If that transition
+fails, automatic rollback restores the backed-up component/package states and
+previous HOME before reporting success or failure. For every other reviewed
+package, `apply` first tries the ordinary ADB shell uninstall. If Fire OS leaves
+it active, the script retries that exact manifest package through the proven
+root helper and requires an absent readback.
 
 ## OTA boundary
 
@@ -58,6 +62,13 @@ requires all three paths to be absent before installing apps or debloating.
 These are build-specific software controls, not an absolute guarantee against
 all future updater behavior. The toolkit never modifies the bootloader or
 recovery partition.
+
+Parental controls can be the Android profile owner. When the exact expected
+Amazon owner is present, `apply` backs up the policy XML and dump, invokes the
+framework API from that package's dynamically discovered UID/SELinux context,
+verifies the owner is gone, and removes parental controls last. A foreign owner
+fails closed. This is intentionally after all other removals and the OTA
+setting because `restore` cannot safely recreate profile ownership from XML.
 
 ## Automatic rollback
 
@@ -90,14 +101,16 @@ then reads back package presence, disabled state, HOME, OTA, and CEC before
 printing `RESTORE_GATE=PASS`.
 
 Backups containing `com.amazon.tv.launcher` or `com.amazon.firehomestarter`
-require the exact still-live root helper because Fire OS protects these package
-state changes. Restore registers those packages for user 0 from the ordinary
-ADB shell context, verifies that registration immediately, and then uses root
-only to restore the protected enabled state and HOME selection. Restore defers
-both packages until every generic manifest package has finished because later
-Fire OS package restoration can revert their user-0 `installed` state. This
-split and ordering are intentional: on kara, the root-derived package-manager
-context can report success without changing user-0 registration.
+require the exact still-live root helper because Fire OS protects their state.
+Current profiles keep the launcher package and disable only its HOME component;
+that component state is backed up and restored explicitly. Older backups in
+which either package was removed remain supported. Restore registers a missing
+package for user 0 from the ordinary ADB shell context, verifies registration,
+and then uses root only for protected enabled state and HOME selection. It
+defers these packages until every generic manifest package has finished because
+later Fire OS package restoration can revert their user-0 `installed` state.
+This split and ordering are intentional: on kara, the root-derived
+package-manager context can report success without changing user-0 registration.
 
 The backed-up launcher component may reject direct HOME selection after it is
 reinstalled. When both protected packages remain active and Fire OS resolves
@@ -110,6 +123,10 @@ supported build first, then run the command above with that daemon path.
 Projectivy, Aurora Store, and Kara Settings remain installed after this package
 state rollback. Remove them only after a working HOME and Settings path have
 been confirmed.
+
+Policy files captured before profile-owner release are retained in the backup
+for forensic/manual recovery. The automated restore does not copy them back or
+claim to recreate an Android profile owner.
 
 ## Recovery priorities
 

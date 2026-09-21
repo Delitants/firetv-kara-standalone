@@ -1,5 +1,4 @@
 com.amazon.aca
-com.amazon.adep
 com.amazon.aiondec
 com.amazon.ale
 com.amazon.alexa.datastore.app
@@ -9,21 +8,16 @@ com.amazon.alexamediaplayer.runtime.ftv
 com.amazon.alta.h2clientservice
 com.amazon.android.marketplace
 com.amazon.aria
-com.amazon.audiohome
 com.amazon.avls.experience
 com.amazon.awvflingreceiver
 com.amazon.bueller.music
 com.amazon.bueller.photos
 com.amazon.cast.sink
-com.amazon.ceviche
 com.amazon.cloud9
 com.amazon.communication.discovery
 com.amazon.d3
-com.amazon.dcp
 com.amazon.device.crashmanager
-com.amazon.device.messaging
 com.amazon.device.metrics
-com.amazon.device.sale.service
 com.amazon.device.software.ota
 com.amazon.device.software.ota.override
 com.amazon.device.sync
@@ -44,7 +38,6 @@ com.amazon.fireos.cirruscloud
 com.amazon.fireos.rescuepartycloud
 com.amazon.franktvinput
 com.amazon.ftv.profilepicker
-com.amazon.ftv.screensaver
 com.amazon.ftvads.deeplinking
 com.amazon.gamehub
 com.amazon.hedwig
@@ -92,7 +85,6 @@ com.amazon.tv.easyupgrade
 com.amazon.tv.ffsprovisioneeclient
 com.amazon.tv.forcedotaupdater.v2
 com.amazon.tv.fw.metrics
-com.amazon.tv.launcher
 com.amazon.tv.legal.notices
 com.amazon.tv.legalresources
 com.amazon.tv.livetv
@@ -108,7 +100,6 @@ com.amazon.venezia
 com.amazon.vizzini.ftvcds
 com.amazon.wha.mediabrowserservice
 com.amazon.whad
-com.amazon.whasettings
 com.amazon.whisperjoin.middleware.np
 com.amazon.whisperlink.core.android
 com.amazon.whisperplay.service.install

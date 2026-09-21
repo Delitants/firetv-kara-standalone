@@ -4,9 +4,9 @@ from pathlib import Path
 
 root = Path(os.environ.get("MANIFEST_ROOT", Path(__file__).parents[1] / "manifests"))
 expected = {
-    "remove-user0.txt": 115,
-    "remove-privileged.txt": 1,
-    "preserve-core.txt": 49,
+    "remove-user0.txt": 106,
+    "remove-privileged.txt": 0,
+    "preserve-core.txt": 59,
     "preserve-compatibility.txt": 16,
 }
 
@@ -23,5 +23,20 @@ for index, left in enumerate(names):
     for right in names[index + 1:]:
         overlap = sets[left] & sets[right]
         assert not overlap, f"{left}/{right}: overlap {sorted(overlap)}"
+
+required_settings_bridge = {
+    "com.amazon.adep",
+    "com.amazon.audiohome",
+    "com.amazon.ceviche",
+    "com.amazon.dcp",
+    "com.amazon.device.messaging",
+    "com.amazon.device.sale.service",
+    "com.amazon.ftv.screensaver",
+    "com.amazon.tv.launcher",
+    "com.amazon.vizzini",
+    "com.amazon.whasettings",
+}
+missing = required_settings_bridge - sets["preserve-core.txt"]
+assert not missing, f"preserve-core.txt: missing stock settings bridge packages {sorted(missing)}"
 
 print("MANIFEST_GATE=PASS")

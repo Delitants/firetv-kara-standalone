@@ -4,7 +4,9 @@ This toolkit converts one exact Fire TV build to a Projectivy-based setup. The
 `apply` command downloads and authenticates the complete kara exploit, obtains
 temporary root, contains a staged OTA, installs Projectivy Launcher and Aurora
 Store, installs the included Kara Settings repair, switches HOME, and removes
-the reviewed non-core Amazon packages for Android user 0.
+the reviewed non-core Amazon packages for Android user 0. It deliberately keeps
+the smallest verified stock support set needed for Fire TV display, audio,
+network, app-management, controller, device, and accessibility settings.
 
 It does not unlock the bootloader, flash a ROM, write a partition, or install
 persistent root.
@@ -142,7 +144,11 @@ the important success markers are:
 ```text
 TEMP_ROOT=PASS
 STAGED_OTA_PATHS=ABSENT
+STOCK_SETTINGS_SUPPORT=PASS
+PROJECTIVY_HOME_GATE=PASS
 PRIVILEGED_REMOVAL=PASS
+PARENTAL_CONTROLS_REMOVAL=PASS
+ADB_ENABLED=1
 VERIFY_GATE=PASS
 APPLY_GATE=PASS
 ```
@@ -190,16 +196,19 @@ The order is fail-closed:
    the root proof, exact daemon executable path, and unchanged firmware.
 6. Resolve only the known empty-directory OTA collision with `rmdir`, then
    require the staged OTA directory and both recovery command paths to be absent.
-7. Download and authenticate Projectivy and Aurora Store, then install them and
-   the included Kara Settings app.
-8. Direct-start Projectivy, root-disable both higher-priority Fire OS HOME
-   blockers (`com.amazon.tv.launcher` and `com.amazon.firehomestarter`), set and
-   read back Projectivy as HOME, then root-remove those blockers before removing
-   the remaining reviewed Amazon packages for user 0. Any reviewed package that
+7. Download and authenticate Projectivy and Aurora Store, install them and Kara
+   Settings, then re-register and enable the exact stock packages required by
+   the Fire TV settings bridge.
+8. Direct-start Projectivy, root-disable only Amazon launcher's HOME activity
+   plus Fire Home Starter, set and read back Projectivy as HOME, and remove Fire
+   Home Starter. The Amazon launcher package remains installed as a privileged
+   bridge to the complete stock Settings menu, but it can no longer become HOME.
+9. Remove the remaining reviewed Amazon packages for user 0. Any package that
    an ordinary shell uninstall leaves active is retried through the proven root
-   helper; the full removal manifest is then read back before the workflow
-   continues.
-9. Set the OTA preference and verify the complete result.
+   helper, and the full removal manifest is read back.
+10. Set the OTA preference, release only the exact Amazon parental-controls
+    profile owner with hash-pinned helpers, remove parental controls last, and
+    verify HOME, ADB, OTA, apps, removals, and the stock settings bridge.
 
 `--root-helper /data/local/tmp/NAME` remains available for advanced recovery.
 It bypasses exploit launch only after providing the same uid-0, build, and exact
@@ -209,16 +218,16 @@ keep the Stick powered until `apply` finishes. See
 If an older checkout reports that Amazon's launcher remained HOME, leave the
 root daemon running, update the repository, and rerun this same resume command.
 
-### Trace an ADEP removal failure
+### Trace package-removal behavior
 
 `--trace-removals` is an opt-in diagnostic for `apply`, not a dry run. It adds
 package-state reads before removal, after each ordinary and root removal
 attempt, and at the final removal gate. Each `REMOVAL_TRACE` line contains a
-controller UTC timestamp, the phase and package just processed, ADEP's user-0
-state, and its observed transition. `ACTIVE_TO_ABSENT` followed by
-`ABSENT_TO_ACTIVE` identifies the first read *after* reappearance; it does not
-by itself prove which service or operation caused it. If ADEP remains `ACTIVE`
-after its root removal attempt, it was never observed absent in that run.
+controller UTC timestamp, the phase and package just processed, and ADEP's
+user-0 state. ADEP is now intentionally preserved because it is part of the
+verified stock Settings dependency chain, so a normal run should show it
+remaining `ACTIVE` throughout. This option remains useful for comparing older
+profiles and diagnosing unexpected package-manager transitions.
 
 Use this only with the exact supported build and the usual backup and rollback
 precautions. It still performs the full mutating `apply` and makes extra ADB
@@ -252,17 +261,25 @@ same connection options and pass the absolute directory:
 
 For a USB bridge, add `--bridge root@LINUX_HOST --serial USB_SERIAL`. Restore
 reinstalls only packages that were present in that backup and restores their
-disabled state, HOME, OTA preference, and CEC guard, then reads all of that state
-back before reporting success. A backup containing the protected Fire OS HOME
-packages is registered for user 0 through the ordinary ADB shell context, then
-uses the still-live, verified root helper only for their protected enabled state
-and HOME selection. These two packages are restored after every other manifest
-package so later Fire OS package activity cannot revert them to
-`installed=false`. If the backed-up launcher activity is no longer eligible as
-HOME, the verified Fire OS equivalent
+disabled state, Amazon launcher HOME-component state, HOME, OTA preference, and
+CEC guard, then reads all of that state back before reporting success. Current
+profiles retain `com.amazon.tv.launcher`; restore still supports older backups
+where it was removed. A protected Fire OS HOME package is registered for user 0
+through the ordinary ADB shell context, then the still-live verified root helper
+restores its protected enabled state and HOME selection. HOME packages are
+handled after every other manifest package so later Fire OS activity cannot
+revert them to `installed=false`. If the backed-up launcher activity is no
+longer eligible as HOME, the verified Fire OS equivalent
 `com.amazon.firehomestarter/.HomeStarterActivity` is accepted. Rootless restore
 is refused. If the daemon was lost to a reboot, obtain a fresh exact-build
 temporary root before restoring. Restore does not flash firmware.
+
+If `apply` must release the exact Amazon parental-controls profile owner, it
+copies `profile_owner.xml`, `device_policies.xml`, and a policy dump into the
+backup first. Those files are forensic/manual recovery material: `restore`
+does not silently recreate Android device-policy ownership. The release is
+therefore the final one-way policy mutation, after every other removal and the
+OTA preference have passed.
 
 ## Complete exploit source
 
@@ -301,12 +318,22 @@ its URL, package name, version, API compatibility, and signing certificate.
 Neither third-party APK is stored in this repository. No other app store or
 updater is installed by this toolkit.
 
-## Kara Settings
+## Stock settings and Kara Settings
 
-Aggressive debloating breaks the stock top-level Settings route. The included
-open-source `local.kara.settingsredirector` provides TV-oriented Network,
-Bluetooth, and Device/About screens. Source, build notes, and the reviewed APK
-hash are under [`app/kara-settings/`](app/kara-settings/).
+Display and audio settings are not reimplemented. Fire OS protects those
+panels with a signature-level permission, so `com.amazon.tv.launcher` is kept
+as a non-HOME privileged bridge to the stock Settings menu. The profile also
+preserves its verified dependencies plus Amazon Home Theater audio settings,
+the Fire TV screensaver service/settings, wireless home-audio settings, AV-sync,
+resolution, HDMI/device-control, network, Bluetooth, and input services.
+
+The included open-source `local.kara.settingsredirector` presents that full
+stock menu as **Fire TV Settings (Display & Sounds + more)** and also provides
+independent TV-oriented Network, Applications, Developer & ADB, Controllers &
+Bluetooth, and Device & About fallbacks. The ADB page is intentionally
+read-only; `apply` refuses success if `adb_enabled` is not still `1`. Source,
+build notes, and the reviewed APK hash are under
+[`app/kara-settings/`](app/kara-settings/).
 
 ## Commands and tests
 

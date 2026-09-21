@@ -15,12 +15,14 @@ host decision suites compile with warnings treated as errors and pass.
 
 ## Standalone controller
 
-- Offline integration suite: 39 passed, 0 failed.
-- Package manifests: 115 ordinary removals, one protected removal, 49 core
+- Offline integration suite: 68 passed, 0 failed.
+- Package manifests: 106 ordinary removals, zero generic protected removals,
+  59 core
   preserves, and 16 compatibility preserves; disjointness gate passed.
 - Excluded-content gate passed.
-- ShellCheck, integration, manifest, and excluded-content gates passed in
-  [GitHub Actions 34649184296](https://github.com/Delitants/firetv-kara-standalone/actions/runs/34649184296).
+- The public [GitHub Actions test workflow](https://github.com/Delitants/firetv-kara-standalone/actions/workflows/test.yml)
+  runs ShellCheck plus the integration, manifest, and excluded-content gates on
+  every push and pull request.
 - A real GitHub release download returned the pinned release tag and exact
   SHA-256 above.
 
@@ -85,3 +87,58 @@ selection, configured package/OTA state, and safe-probe compatibility. It does
 not claim a fresh live-root result or a new reboot-persistence trial. The live
 root statement remains scoped to the earlier controlled run that produced the
 byte-identical released artifact.
+
+## Live Settings validation — 2026-09-20
+
+The same physical `kara/AFTKA` target on build `0035334210436` was connected
+over the authorized USB ADB bridge. Before testing, the exact hidden stock
+Settings dependency set was registered and enabled for Android user 0:
+
+```text
+com.amazon.adep
+com.amazon.audiohome
+com.amazon.ceviche
+com.amazon.dcp
+com.amazon.device.messaging
+com.amazon.device.sale.service
+com.amazon.ftv.screensaver
+com.amazon.tv.launcher
+com.amazon.vizzini
+com.amazon.whasettings
+```
+
+The updated, same-certificate Kara Settings v6 APK installed successfully and
+showed these TV-oriented routes:
+
+```text
+Fire TV Settings (Display & Sounds + more)
+Network
+Applications
+Developer & ADB
+Controllers & Bluetooth
+Device & About
+```
+
+Selecting the first route resumed
+`com.amazon.tv.launcher/.ui.MainSettingsActivity`, the exported privileged
+bridge used by the stock launcher. The full Fire TV Settings menu rendered.
+Display & Sounds opened and visibly contained Alexa Home Theater, Screensaver,
+Display, Audio, Enable Display Mirroring, and HDMI CEC Device Control.
+Applications, Device, Network, and Controllers & Bluetooth also resumed their
+stock panels without a `com.amazon.tv.settings.v2` crash during the test.
+
+Fire OS rejects direct third-party launch of the underlying Display & Sounds
+activity because it requires the signature/privileged
+`com.amazon.tv.permission.LAUNCHER_SETTINGS` permission. This is why the
+profile retains the Amazon launcher package while disabling only its HOME
+activity. The APK exercised on-device has SHA-256:
+
+```text
+7b349318e531300f2c6a0e5541918d932fdd36ab62f5e633e2e284592c17aee0
+```
+
+This live pass validates the Settings bridge and Kara Settings UI. It does not
+claim a fresh end-to-end `apply`, root-assisted HOME-component disable, reboot,
+or profile-owner release on the reference Stick. Those controller paths are
+covered by the 68-test offline suite; profile-owner removal remains gated to
+the exact expected component, dynamic UID/context, and hash-pinned helpers.

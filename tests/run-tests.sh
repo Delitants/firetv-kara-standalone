@@ -16,13 +16,16 @@ new_fixture() {
     printf 'fixture official Aurora Store APK\n' > "$fixture/aurora.apk"
     printf 'fixture kara exploit ELF\n' > "$fixture/kara-exploit.arm"
     printf 'fixture experimental kara exploit ELF\n' > "$fixture/kara-experimental.arm"
-    printf 'package:com.amazon.tv.launcher\npackage:com.amazon.firehomestarter\npackage:com.amazon.device.software.ota\n' > "$fixture/active.packages"
-    printf 'com.amazon.tv.launcher\ncom.amazon.firehomestarter\ncom.amazon.device.software.ota\n' > "$fixture/remove-user0.txt"
-    printf 'com.amazon.vizzini\n' > "$fixture/remove-privileged.txt"
+    printf 'package:com.amazon.tv.launcher\npackage:com.amazon.firehomestarter\npackage:com.amazon.device.software.ota\npackage:com.amazon.adep\npackage:com.amazon.audiohome\npackage:com.amazon.ceviche\npackage:com.amazon.dcp\npackage:com.amazon.device.messaging\npackage:com.amazon.device.sale.service\npackage:com.amazon.ftv.screensaver\npackage:com.amazon.vizzini\npackage:com.amazon.whasettings\n' > "$fixture/active.packages"
+    printf 'com.amazon.firehomestarter\ncom.amazon.device.software.ota\n' > "$fixture/remove-user0.txt"
+    printf 'com.amazon.testprivileged\n' > "$fixture/remove-privileged.txt"
     printf '0\n' > "$fixture/ota.state"
     printf '0\n' > "$fixture/cec.state"
+    printf '%s\n' "${FAKE_ADB_ENABLED:-1}" > "$fixture/adb-enabled.state"
     printf '0\n' > "$fixture/root.state"
+    printf '%s\n' "${FAKE_PROFILE_OWNER_STATE:-absent}" > "$fixture/profile-owner.state"
     printf 'enabled\n' > "$fixture/amazon-launcher.state"
+    printf 'enabled\n' > "$fixture/amazon-launcher-home.state"
     printf 'enabled\n' > "$fixture/firehomestarter.state"
     printf '0035334210436\n' > "$fixture/build.state"
     printf '%s\n' "${FAKE_OTA_LIVE_PATH:-missing}" > "$fixture/ota-live-path.state"
@@ -153,6 +156,7 @@ case "$*" in
             grep -Fx 'package:com.amazon.firehomestarter' "$FAKE_ACTIVE_PACKAGES" >/dev/null; then
             printf 'com.amazon.firehomestarter/.HomeStarterActivity\n'
         elif [ "$(cat "$FAKE_AMAZON_LAUNCHER_STATE")" = enabled ] &&
+            [ "$(cat "$FAKE_AMAZON_LAUNCHER_HOME_STATE")" = enabled ] &&
             grep -Fx 'package:com.amazon.tv.launcher' "$FAKE_ACTIVE_PACKAGES" >/dev/null; then
             printf 'com.amazon.tv.launcher/.ui.HomeActivity_vNext\n'
         elif [ "$(cat "$FAKE_FIREHOMESTARTER_STATE")" = enabled ] &&
@@ -160,7 +164,29 @@ case "$*" in
             printf 'com.amazon.firehomestarter/.HomeStarterActivity\n'
         elif [ -s "$FAKE_HOME_STATE" ]; then cat "$FAKE_HOME_STATE"
         else printf '%s\n' "${FAKE_HOME:-com.amazon.tv.launcher/.ui.HomeActivity_vNext}"; fi ;;
+    'shell cmd package resolve-activity --brief --components --user 0 -n com.amazon.tv.launcher/.ui.HomeActivity_vNext')
+        if [ "$(cat "$FAKE_AMAZON_LAUNCHER_STATE")" = enabled ] &&
+            [ "$(cat "$FAKE_AMAZON_LAUNCHER_HOME_STATE")" = enabled ] &&
+            grep -Fx 'package:com.amazon.tv.launcher' "$FAKE_ACTIVE_PACKAGES" >/dev/null; then
+            printf 'com.amazon.tv.launcher/.ui.HomeActivity_vNext\n'
+        fi ;;
     'shell pm list packages --user 0') cat "$FAKE_ACTIVE_PACKAGES" ;;
+    'shell pm list packages -U com.amazon.tv.parentalcontrols')
+        if grep -Fx 'package:com.amazon.tv.parentalcontrols' "$FAKE_ACTIVE_PACKAGES" >/dev/null; then
+            printf 'package:com.amazon.tv.parentalcontrols uid:%s\n' "${FAKE_PARENTAL_UID:-10161}"
+        fi ;;
+    'shell pm path com.amazon.tv.parentalcontrols')
+        printf 'package:/system/priv-app/com.amazon.tv.parentalcontrols/com.amazon.tv.parentalcontrols.apk\n' ;;
+    'shell dumpsys device_policy')
+        case "$(cat "$FAKE_PROFILE_OWNER_STATE_FILE")" in
+            exact)
+                printf 'Profile Owner (User 0):\n'
+                printf '  admin=ComponentInfo{com.amazon.tv.parentalcontrols/com.amazon.tv.parentalcontrols.PCONAdminReceiver}\n'
+                printf '  testOnlyAdmin=false\n' ;;
+            foreign)
+                printf 'Profile Owner (User 0):\n'
+                printf '  admin=ComponentInfo{com.example.owner/com.example.owner.AdminReceiver}\n' ;;
+        esac ;;
     'shell pm list packages -d --user 0')
         if [ "$(cat "$FAKE_AMAZON_LAUNCHER_STATE")" = disabled ] &&
             grep -Fx 'package:com.amazon.tv.launcher' "$FAKE_ACTIVE_PACKAGES" >/dev/null; then
@@ -178,13 +204,16 @@ case "$*" in
             printf 'package:com.aurora.store\n' >> "$FAKE_ACTIVE_PACKAGES"
         fi
         printf 'Success\n' ;;
-    install\ -r\ *kara-settings-v5-signed.apk)
+    install\ -r\ *kara-settings-v6-signed.apk)
         printf 'package:local.kara.settingsredirector\n' >> "$FAKE_ACTIVE_PACKAGES"
         printf 'Success\n' ;;
     push\ *\ /data/local/tmp/kara-ghostlock-[0-9]*) printf '1 file pushed\n' ;;
     push\ *\ /data/local/tmp/kara-ghostlock-experimental-[0-9]*) printf '1 file pushed\n' ;;
+    push\ *\ /data/local/tmp/kara-parental-uid-exec-[0-9]*) printf '1 file pushed\n' ;;
+    push\ *\ /data/local/tmp/kara-clear-profile-owner-[0-9]*.dex) printf '1 file pushed\n' ;;
     shell\ chmod\ 700\ /data/local/tmp/kara-ghostlock-[0-9]*) : ;;
     shell\ chmod\ 700\ /data/local/tmp/kara-ghostlock-experimental-[0-9]*) : ;;
+    shell\ chmod\ 700\ /data/local/tmp/kara-parental-uid-exec-[0-9]*) : ;;
     shell\ /data/local/tmp/kara-ghostlock-[0-9]*\ --probe)
         printf 'V2 SAFE PROBE PASS (reclaim and GhostLock were not invoked)\n' >&2 ;;
     shell\ /data/local/tmp/kara-ghostlock-experimental-[0-9]*\ --probe-newer\ *)
@@ -240,10 +269,25 @@ case "$*" in
             *'PRESENT:/data/ota_package'*)
                 [ "$(cat "$FAKE_OTA_LIVE_PATH_STATE")" = missing ] ||
                     printf 'PRESENT:/data/ota_package\n' ;;
-            *'runcon u:r:shell:s0 /system/bin/pm uninstall -k --user 0 com.amazon.vizzini'*)
-                grep -Fvx 'package:com.amazon.vizzini' "$FAKE_ACTIVE_PACKAGES" > "$FAKE_ACTIVE_PACKAGES.next" || true
+            *'runcon u:r:shell:s0 /system/bin/pm uninstall -k --user 0 com.amazon.testprivileged'*)
+                grep -Fvx 'package:com.amazon.testprivileged' "$FAKE_ACTIVE_PACKAGES" > "$FAKE_ACTIVE_PACKAGES.next" || true
                 mv "$FAKE_ACTIVE_PACKAGES.next" "$FAKE_ACTIVE_PACKAGES"
                 printf 'Success\n' ;;
+            *'cat /data/system/users/0/profile_owner.xml'*)
+                printf '<profile-owner package="com.amazon.tv.parentalcontrols" />\n' ;;
+            *'cat /data/system/device_policies.xml'*)
+                printf '<policies />\n' ;;
+            *'u:r:amazon_app:s0 /system/bin/id id'*)
+                printf 'uid=%s gid=%s context=u:r:amazon_app:s0\n' "${FAKE_PARENTAL_UID:-10161}" "${FAKE_PARENTAL_UID:-10161}" ;;
+            *'CLASSPATH=/data/local/tmp/kara-clear-profile-owner-'*' ClearProfileOwner'*)
+                [ "$(cat "$FAKE_PROFILE_OWNER_STATE_FILE")" = exact ] || exit 66
+                printf 'absent\n' > "$FAKE_PROFILE_OWNER_STATE_FILE"
+                printf 'clearProfileOwner: resolving device_policy\n'
+                printf 'clearProfileOwner: invoking as profile-owner UID\n'
+                printf 'clearProfileOwner: completed\n' ;;
+            *'runcon u:r:shell:s0 /system/bin/pm disable --user 0 com.amazon.tv.launcher/.ui.HomeActivity_vNext'*)
+                printf 'disabled\n' > "$FAKE_AMAZON_LAUNCHER_HOME_STATE"
+                printf 'Package com.amazon.tv.launcher/.ui.HomeActivity_vNext new state: disabled\n' ;;
             *'runcon u:r:shell:s0 /system/bin/pm disable --user 0 com.amazon.tv.launcher'*)
                 printf 'disabled\n' > "$FAKE_AMAZON_LAUNCHER_STATE"
                 printf 'Package com.amazon.tv.launcher new state: disabled\n' ;;
@@ -282,6 +326,9 @@ case "$*" in
                 printf 'Package installed\n' ;;
             *'runcon u:r:shell:s0 /system/bin/cmd package install-existing --user 0 com.amazon.firehomestarter'*)
                 printf 'Package installed\n' ;;
+            *'runcon u:r:shell:s0 /system/bin/pm enable --user 0 com.amazon.tv.launcher/.ui.HomeActivity_vNext'*)
+                printf 'enabled\n' > "$FAKE_AMAZON_LAUNCHER_HOME_STATE"
+                printf 'Package com.amazon.tv.launcher/.ui.HomeActivity_vNext new state: enabled\n' ;;
             *'runcon u:r:shell:s0 /system/bin/pm enable --user 0 com.amazon.tv.launcher'*)
                 printf 'enabled\n' > "$FAKE_AMAZON_LAUNCHER_STATE"
                 printf 'Package com.amazon.tv.launcher new state: enabled\n' ;;
@@ -316,7 +363,15 @@ case "$*" in
             *) printf 'unexpected root helper command\n' >&2; exit 65 ;;
         esac ;;
     'shell settings get global ota_disable_automatic_update') cat "$FAKE_OTA_STATE" ;;
+    'shell settings get global adb_enabled') cat "$FAKE_ADB_ENABLED_STATE" ;;
+    shell\ rm\ -f\ /data/local/tmp/kara-parental-uid-exec-[0-9]*\ /data/local/tmp/kara-clear-profile-owner-[0-9]*.dex) : ;;
     'shell settings put global ota_disable_automatic_update 1') printf '1\n' > "$FAKE_OTA_STATE" ;;
+    shell\ settings\ put\ global\ ota_disable_automatic_update\ *)
+        printf '%s\n' "${6-}" > "$FAKE_OTA_STATE" ;;
+    'shell settings delete global ota_disable_automatic_update') printf 'null\n' > "$FAKE_OTA_STATE" ;;
+    'shell cmd package resolve-activity --brief --components --user 0 -n com.amazon.tv.launcher/.ui.MainSettingsActivity')
+        grep -Fx 'package:com.amazon.tv.launcher' "$FAKE_ACTIVE_PACKAGES" >/dev/null &&
+            printf 'com.amazon.tv.launcher/.ui.MainSettingsActivity\n' ;;
     'shell settings get secure block_cec_standby') cat "$FAKE_CEC_STATE" ;;
     'shell settings put secure block_cec_standby 1') printf '1\n' > "$FAKE_CEC_STATE" ;;
     'shell settings put secure block_cec_standby 0') printf '0\n' > "$FAKE_CEC_STATE" ;;
@@ -377,6 +432,51 @@ EOF
         "$fixture/bin/adb" "$fixture/bin/scp" "$fixture/bin/ssh"
 }
 
+test_releases_exact_parental_profile_owner_before_root_removal() {
+    FAKE_PROFILE_OWNER_STATE=exact new_fixture
+    printf 'package:com.amazon.tv.parentalcontrols\n' >> "$fixture/active.packages"
+    printf 'com.amazon.tv.parentalcontrols\n' >> "$fixture/remove-user0.txt"
+    if FAKE_SHELL_NO_EFFECT_PACKAGE=com.amazon.tv.parentalcontrols \
+        run_tool --root-helper /data/local/tmp/kara-root-helper --yes apply >"$fixture/out" 2>&1 &&
+        grep -F 'PARENTAL_PROFILE_OWNER_RELEASE=PASS uid=10161' "$fixture/out" >/dev/null &&
+        ! grep -Fx 'package:com.amazon.tv.parentalcontrols' "$fixture/active.packages" >/dev/null &&
+        [ "$(cat "$fixture/profile-owner.state")" = absent ] &&
+        grep -E 'kara-root-helper --cmd .*kara-parental-uid-exec-[0-9]+ 10161 u:r:amazon_app:s0 /system/bin/id id' "$fixture/adb.log" >/dev/null &&
+        grep -E 'kara-root-helper --cmd .*CLASSPATH=/data/local/tmp/kara-clear-profile-owner-[0-9]+[.]dex .* ClearProfileOwner' "$fixture/adb.log" >/dev/null &&
+        grep -E 'shell rm -f /data/local/tmp/kara-parental-uid-exec-[0-9]+ /data/local/tmp/kara-clear-profile-owner-[0-9]+[.]dex' "$fixture/adb.log" >/dev/null
+    then
+        ota_line=$(grep -nFx 'shell settings put global ota_disable_automatic_update 1' "$fixture/adb.log" | head -n 1 | cut -d: -f1)
+        release_line=$(grep -n 'CLASSPATH=/data/local/tmp/kara-clear-profile-owner-' "$fixture/adb.log" | head -n 1 | cut -d: -f1)
+        if [ -n "$ota_line" ] && [ -n "$release_line" ] && [ "$ota_line" -lt "$release_line" ]; then
+            ok 'releases exact parental profile owner last with dynamic UID before root removal'
+        else
+            not_ok 'releases exact parental profile owner last with dynamic UID before root removal'; cat "$fixture/adb.log"
+        fi
+    else
+        not_ok 'releases exact parental profile owner last with dynamic UID before root removal'; cat "$fixture/out"; cat "$fixture/adb.log"
+    fi
+    rm -rf "$fixture"
+}
+
+test_refuses_foreign_profile_owner_without_staging_release_helpers() {
+    FAKE_PROFILE_OWNER_STATE=foreign new_fixture
+    printf 'package:com.amazon.tv.parentalcontrols\n' >> "$fixture/active.packages"
+    printf 'com.amazon.tv.parentalcontrols\n' >> "$fixture/remove-user0.txt"
+    if FAKE_SHELL_NO_EFFECT_PACKAGE=com.amazon.tv.parentalcontrols \
+        run_tool --root-helper /data/local/tmp/kara-root-helper --yes apply >"$fixture/out" 2>&1; then
+        not_ok 'refuses a foreign profile owner'
+    elif grep -F 'unexpected profile owner; refusing parental-controls release' "$fixture/out" >/dev/null &&
+        ! grep -F 'kara-parental-uid-exec-' "$fixture/adb.log" >/dev/null &&
+        [ "$(cat "$fixture/profile-owner.state")" = foreign ] &&
+        grep -F 'AUTOMATIC_ROLLBACK=PASS' "$fixture/out" >/dev/null
+    then
+        ok 'refuses a foreign profile owner without staging release helpers'
+    else
+        not_ok 'refuses a foreign profile owner without staging release helpers'; cat "$fixture/out"; cat "$fixture/adb.log"
+    fi
+    rm -rf "$fixture"
+}
+
 run_tool() {
     HOME="${TEST_HOME:-$HOME}" PATH="$fixture/bin:$PATH" \
     CURL="${TEST_CURL:-$fixture/bin/curl}" AAPT="${TEST_AAPT:-$fixture/bin/aapt}" \
@@ -395,8 +495,11 @@ run_tool() {
     FAKE_ACTIVE_PACKAGES="$fixture/active.packages" \
     FAKE_OTA_STATE="$fixture/ota.state" \
     FAKE_CEC_STATE="$fixture/cec.state" \
+    FAKE_ADB_ENABLED_STATE="$fixture/adb-enabled.state" \
     FAKE_ROOT_STATE="$fixture/root.state" \
+    FAKE_PROFILE_OWNER_STATE_FILE="$fixture/profile-owner.state" \
     FAKE_AMAZON_LAUNCHER_STATE="$fixture/amazon-launcher.state" \
+    FAKE_AMAZON_LAUNCHER_HOME_STATE="$fixture/amazon-launcher-home.state" \
     FAKE_FIREHOMESTARTER_STATE="$fixture/firehomestarter.state" \
     FAKE_BUILD_STATE="$fixture/build.state" \
     FAKE_OTA_LIVE_PATH_STATE="$fixture/ota-live-path.state" \
@@ -657,11 +760,11 @@ test_downloads_and_verifies_official_aurora() {
 
 test_uses_explicit_root_helper_for_protected_package() {
     new_fixture
-    printf 'package:com.amazon.vizzini\n' >> "$fixture/active.packages"
+    printf 'package:com.amazon.testprivileged\n' >> "$fixture/active.packages"
     if run_tool --root-helper /data/local/tmp/kara-root-helper --yes apply >"$fixture/out" 2>&1 &&
         grep -F 'shell /data/local/tmp/kara-root-helper --cmd' "$fixture/adb.log" >/dev/null &&
         grep -F 'PRIVILEGED_REMOVAL=PASS' "$fixture/out" >/dev/null &&
-        ! grep -Fx 'package:com.amazon.vizzini' "$fixture/active.packages" >/dev/null
+        ! grep -Fx 'package:com.amazon.testprivileged' "$fixture/active.packages" >/dev/null
     then
         ok 'uses explicit root helper for protected package'
     else
@@ -672,7 +775,7 @@ test_uses_explicit_root_helper_for_protected_package() {
 
 test_resumes_verified_root_helper_while_selinux_is_permissive() {
     new_fixture
-    printf 'package:com.amazon.vizzini\n' >> "$fixture/active.packages"
+    printf 'package:com.amazon.testprivileged\n' >> "$fixture/active.packages"
     if FAKE_SELINUX=Permissive run_tool \
         --root-helper /data/local/tmp/kara-root-helper --yes apply >"$fixture/out" 2>&1 &&
         grep -F 'TEMP_ROOT=PASS supplied-helper' "$fixture/out" >/dev/null &&
@@ -720,7 +823,7 @@ test_rejects_euid_only_root_helper_proof() {
 
 test_clears_only_empty_live_ota_collision() {
     FAKE_OTA_LIVE_PATH=empty FAKE_OTA_HELD_PATH=empty new_fixture
-    printf 'package:com.amazon.vizzini\n' >> "$fixture/active.packages"
+    printf 'package:com.amazon.testprivileged\n' >> "$fixture/active.packages"
     if FAKE_SELINUX=Permissive run_tool \
         --root-helper /data/local/tmp/kara-root-helper --yes apply >"$fixture/out" 2>&1 &&
         grep -F 'EMPTY_OTA_COLLISION_CLEARED=PASS' "$fixture/out" >/dev/null &&
@@ -774,7 +877,7 @@ test_refuses_nonempty_live_ota_collision_after_new_root() {
 
 test_apply_obtains_temporary_root_before_mutation() {
     new_fixture
-    printf 'package:com.amazon.vizzini\n' >> "$fixture/active.packages"
+    printf 'package:com.amazon.testprivileged\n' >> "$fixture/active.packages"
     if run_tool --yes apply >"$fixture/out" 2>&1; then
         push_line=$(grep -n 'push .*kara-ghostlock-PS7713-5443.arm /data/local/tmp/kara-ghostlock-' "$fixture/adb.log" | head -n 1 | cut -d: -f1)
         probe_line=$(grep -n -- '--probe' "$fixture/adb.log" | head -n 1 | cut -d: -f1)
@@ -985,17 +1088,17 @@ test_removal_trace_rejects_non_apply_command() {
 
 test_adb_shell_cannot_consume_the_remaining_manifest() {
     new_fixture
-    printf 'package:com.amazon.aca\npackage:com.amazon.adep\n' >> "$fixture/active.packages"
-    printf 'com.amazon.aca\ncom.amazon.adep\n' >> "$fixture/remove-user0.txt"
+    printf 'package:com.amazon.aca\npackage:com.amazon.trigger\n' >> "$fixture/active.packages"
+    printf 'com.amazon.aca\ncom.amazon.trigger\n' >> "$fixture/remove-user0.txt"
     if FAKE_ADB_DRAIN_STDIN=1 \
-        FAKE_SHELL_NO_EFFECT_PACKAGES='com.amazon.aca com.amazon.adep' \
+        FAKE_SHELL_NO_EFFECT_PACKAGES='com.amazon.aca com.amazon.trigger' \
         run_tool --root-helper /data/local/tmp/kara-root-helper --trace-removals --yes apply \
         </dev/null >"$fixture/out" 2>&1 &&
-        grep -F 'phase=shell package=com.amazon.adep ' "$fixture/out" >/dev/null &&
-        grep -F 'phase=root package=com.amazon.adep ' "$fixture/out" >/dev/null &&
+        grep -F 'phase=shell package=com.amazon.trigger ' "$fixture/out" >/dev/null &&
+        grep -F 'phase=root package=com.amazon.trigger ' "$fixture/out" >/dev/null &&
         grep -F 'APPLY_GATE=PASS' "$fixture/out" >/dev/null &&
         ! grep -Fx 'package:com.amazon.aca' "$fixture/active.packages" >/dev/null &&
-        ! grep -Fx 'package:com.amazon.adep' "$fixture/active.packages" >/dev/null
+        ! grep -Fx 'package:com.amazon.trigger' "$fixture/active.packages" >/dev/null
     then
         ok 'ADB shell cannot consume later manifest entries during either removal pass'
     else
@@ -1031,27 +1134,27 @@ test_refuses_removal_when_projectivy_does_not_become_home() {
     rm -rf "$fixture"
 }
 
-test_replaces_both_fire_os_home_blockers_under_root() {
+test_replaces_fire_os_home_while_preserving_stock_settings_bridge() {
     new_fixture
     if run_tool --root-helper /data/local/tmp/kara-root-helper --yes apply >"$fixture/out" 2>&1; then
         direct_line=$(grep -n 'am start -W --user 0 -n com.spocky.projengmenu/.ui.home.MainActivity' "$fixture/adb.log" | head -n 1 | cut -d: -f1)
-        launcher_disable_line=$(grep -n 'pm disable --user 0 com.amazon.tv.launcher' "$fixture/adb.log" | head -n 1 | cut -d: -f1)
+        launcher_disable_line=$(grep -n 'pm disable --user 0 com.amazon.tv.launcher/.ui.HomeActivity_vNext' "$fixture/adb.log" | head -n 1 | cut -d: -f1)
         starter_disable_line=$(grep -n 'pm disable --user 0 com.amazon.firehomestarter' "$fixture/adb.log" | head -n 1 | cut -d: -f1)
         home_line=$(grep -n 'cmd package set-home-activity --user 0 com.spocky.projengmenu/.ui.home.MainActivity' "$fixture/adb.log" | head -n 1 | cut -d: -f1)
-        launcher_remove_line=$(grep -n 'pm uninstall -k --user 0 com.amazon.tv.launcher' "$fixture/adb.log" | head -n 1 | cut -d: -f1)
         starter_remove_line=$(grep -n 'pm uninstall -k --user 0 com.amazon.firehomestarter' "$fixture/adb.log" | head -n 1 | cut -d: -f1)
         if [ -n "$direct_line" ] && [ "$direct_line" -lt "$launcher_disable_line" ] &&
             [ "$launcher_disable_line" -lt "$home_line" ] && [ "$starter_disable_line" -lt "$home_line" ] &&
-            [ "$home_line" -lt "$launcher_remove_line" ] && [ "$home_line" -lt "$starter_remove_line" ] &&
-            ! grep -Fx 'package:com.amazon.tv.launcher' "$fixture/active.packages" >/dev/null &&
+            [ "$home_line" -lt "$starter_remove_line" ] &&
+            ! grep -F 'pm uninstall -k --user 0 com.amazon.tv.launcher' "$fixture/adb.log" >/dev/null &&
+            grep -Fx 'package:com.amazon.tv.launcher' "$fixture/active.packages" >/dev/null &&
             ! grep -Fx 'package:com.amazon.firehomestarter' "$fixture/active.packages" >/dev/null
         then
-            ok 'replaces both higher-priority Fire OS HOME blockers under root'
+            ok 'replaces Fire OS HOME while preserving the stock settings bridge'
         else
-            not_ok 'replaces both higher-priority Fire OS HOME blockers under root'; cat "$fixture/adb.log"
+            not_ok 'replaces Fire OS HOME while preserving the stock settings bridge'; cat "$fixture/adb.log"
         fi
     else
-        not_ok 'replaces both higher-priority Fire OS HOME blockers under root'; cat "$fixture/out"; cat "$fixture/adb.log"
+        not_ok 'replaces Fire OS HOME while preserving the stock settings bridge'; cat "$fixture/out"; cat "$fixture/adb.log"
     fi
     rm -rf "$fixture"
 }
@@ -1063,10 +1166,12 @@ test_home_switch_failure_restores_fire_os_home_blockers() {
     elif grep -F 'Projectivy did not become HOME' "$fixture/out" >/dev/null &&
         grep -F 'AUTOMATIC_ROLLBACK=PASS' "$fixture/out" >/dev/null &&
         [ "$(cat "$fixture/amazon-launcher.state")" = enabled ] &&
+        [ "$(cat "$fixture/amazon-launcher-home.state")" = enabled ] &&
         [ "$(cat "$fixture/firehomestarter.state")" = enabled ] &&
         grep -Fx 'package:com.amazon.tv.launcher' "$fixture/active.packages" >/dev/null &&
         grep -Fx 'package:com.amazon.firehomestarter' "$fixture/active.packages" >/dev/null &&
         grep -F 'pm enable --user 0 com.amazon.tv.launcher' "$fixture/adb.log" >/dev/null &&
+        grep -F 'pm enable --user 0 com.amazon.tv.launcher/.ui.HomeActivity_vNext' "$fixture/adb.log" >/dev/null &&
         grep -F 'pm enable --user 0 com.amazon.firehomestarter' "$fixture/adb.log" >/dev/null &&
         grep -F 'cmd package set-home-activity --user 0 com.amazon.tv.launcher/.ui.HomeActivity' "$fixture/adb.log" >/dev/null
     then
@@ -1077,35 +1182,38 @@ test_home_switch_failure_restores_fire_os_home_blockers() {
     rm -rf "$fixture"
 }
 
-test_failure_after_home_blocker_removal_reinstalls_it() {
+test_failure_after_home_switch_restores_home_blockers() {
     new_fixture
-    if FAKE_ROOT_UNINSTALL_FAIL_PACKAGE=com.amazon.firehomestarter \
+    if FAKE_SHELL_NO_EFFECT_PACKAGE=com.amazon.device.software.ota \
+        FAKE_ROOT_STICKY_PACKAGE=com.amazon.device.software.ota \
         run_tool --root-helper /data/local/tmp/kara-root-helper --yes apply >"$fixture/out" 2>&1; then
-        not_ok 'failure after HOME blocker removal reinstalls it'
-    elif grep -F 'could not remove Fire OS HOME blocker: com.amazon.firehomestarter' "$fixture/out" >/dev/null &&
+        not_ok 'failure after HOME switch restores HOME blockers'
+    elif grep -F 'root fallback removal failed: com.amazon.device.software.ota' "$fixture/out" >/dev/null &&
         grep -F 'AUTOMATIC_ROLLBACK=PASS' "$fixture/out" >/dev/null &&
         grep -Fx 'package:com.amazon.tv.launcher' "$fixture/active.packages" >/dev/null &&
         grep -Fx 'package:com.amazon.firehomestarter' "$fixture/active.packages" >/dev/null &&
         [ "$(cat "$fixture/amazon-launcher.state")" = enabled ] &&
+        [ "$(cat "$fixture/amazon-launcher-home.state")" = enabled ] &&
         [ "$(cat "$fixture/firehomestarter.state")" = enabled ]
     then
-        remove_line=$(grep -n 'pm uninstall -k --user 0 com.amazon.tv.launcher' "$fixture/adb.log" | head -n 1 | cut -d: -f1)
-        install_line=$(grep -nFx 'shell cmd package install-existing --user 0 com.amazon.tv.launcher' "$fixture/adb.log" | cut -d: -f1)
-        enable_line=$(grep -n 'pm enable --user 0 com.amazon.tv.launcher' "$fixture/adb.log" | tail -n 1 | cut -d: -f1)
+        remove_line=$(grep -n 'pm uninstall -k --user 0 com.amazon.firehomestarter' "$fixture/adb.log" | head -n 1 | cut -d: -f1)
+        install_line=$(grep -nFx 'shell cmd package install-existing --user 0 com.amazon.firehomestarter' "$fixture/adb.log" | cut -d: -f1)
+        enable_line=$(grep -n 'pm enable --user 0 com.amazon.firehomestarter' "$fixture/adb.log" | tail -n 1 | cut -d: -f1)
         if [ -n "$remove_line" ] && [ "$remove_line" -lt "$install_line" ] && [ "$install_line" -lt "$enable_line" ]; then
-            ok 'failure after HOME blocker removal reinstalls it'
+            ok 'failure after HOME switch restores HOME blockers'
         else
-            not_ok 'failure after HOME blocker removal reinstalls it'; cat "$fixture/adb.log"
+            not_ok 'failure after HOME switch restores HOME blockers'; cat "$fixture/adb.log"
         fi
     else
-        not_ok 'failure after HOME blocker removal reinstalls it'; cat "$fixture/out"; cat "$fixture/adb.log"
+        not_ok 'failure after HOME switch restores HOME blockers'; cat "$fixture/out"; cat "$fixture/adb.log"
     fi
     rm -rf "$fixture"
 }
 
 test_rollback_fails_when_home_blocker_readback_is_wrong() {
     new_fixture
-    if FAKE_ROOT_UNINSTALL_FAIL_PACKAGE=com.amazon.firehomestarter FAKE_SHELL_RESTORE_EFFECT=0 \
+    if FAKE_SHELL_NO_EFFECT_PACKAGE=com.amazon.device.software.ota \
+        FAKE_ROOT_STICKY_PACKAGE=com.amazon.device.software.ota FAKE_SHELL_RESTORE_EFFECT=0 \
         run_tool --root-helper /data/local/tmp/kara-root-helper --yes apply >"$fixture/out" 2>&1; then
         not_ok 'rollback fails when HOME blocker readback is wrong'
     elif grep -F 'AUTOMATIC_ROLLBACK=FAIL' "$fixture/out" >/dev/null &&
@@ -1232,7 +1340,7 @@ test_restore_rejects_launcher_equivalence_when_launcher_was_not_backed_up() {
 test_installs_kara_settings_before_home_switch() {
     new_fixture
     if run_tool --yes apply >"$fixture/out" 2>&1; then
-        settings_line=$(grep -n 'install -r .*kara-settings-v5-signed.apk' "$fixture/adb.log" | head -n 1 | cut -d: -f1)
+        settings_line=$(grep -n 'install -r .*kara-settings-v6-signed.apk' "$fixture/adb.log" | head -n 1 | cut -d: -f1)
         home_line=$(grep -n 'set-home-activity --user 0 com.spocky.projengmenu' "$fixture/adb.log" | head -n 1 | cut -d: -f1)
         if [ -n "$settings_line" ] && [ "$settings_line" -lt "$home_line" ]; then
             ok 'installs Kara Settings before HOME switch'
@@ -1370,6 +1478,50 @@ test_readme_documents_the_complete_workflow() {
     fi
 }
 
+test_kara_settings_v6_source_and_models() {
+    model_output=
+    source_output=
+    if model_output=$("$repo/tests/test-kara-settings-models.sh" 2>&1) &&
+        source_output=$("$repo/tests/verify-kara-settings-source.sh" 2>&1) &&
+        printf '%s\n' "$model_output" | grep -Fx 'KARA_SETTINGS_MODEL_GATE=PASS' >/dev/null &&
+        printf '%s\n' "$source_output" | grep -Fx 'KARA_SETTINGS_SOURCE_GATE=PASS' >/dev/null
+    then
+        ok 'Kara Settings v6 source and models expose safe essential settings'
+    else
+        not_ok 'Kara Settings v6 source and models expose safe essential settings'
+        printf '%s\n%s\n' "$model_output" "$source_output"
+    fi
+}
+
+test_apply_verifies_adb_remains_enabled() {
+    FAKE_ADB_ENABLED=0 new_fixture
+    # Keep the pre-existing OTA value equal to apply's target so this test
+    # isolates the ADB gate instead of the older fake's put-global limitation.
+    printf '1\n' > "$fixture/ota.state"
+    if run_tool --root-helper /data/local/tmp/kara-root-helper --yes apply >"$fixture/out" 2>&1; then
+        not_ok 'apply verifies ADB remains enabled'
+    elif grep -F 'FAIL: ADB debugging is not enabled after apply' "$fixture/out" >/dev/null &&
+        grep -Fx 'shell settings get global adb_enabled' "$fixture/adb.log" >/dev/null &&
+        grep -F 'AUTOMATIC_ROLLBACK=PASS' "$fixture/out" >/dev/null
+    then
+        ok 'apply verifies ADB remains enabled'
+    else
+        not_ok 'apply verifies ADB remains enabled'; cat "$fixture/out"; cat "$fixture/adb.log"
+    fi
+    rm -rf "$fixture"
+}
+
+if [ -n "${KARA_TEST_ONLY:-}" ]; then
+    for selected_test in $KARA_TEST_ONLY; do
+        case "$selected_test" in test_[A-Za-z0-9_]*) : ;; *) printf 'unsafe test selector: %s\n' "$selected_test" >&2; exit 2 ;; esac
+        command -v "$selected_test" >/dev/null 2>&1 || { printf 'unknown test selector: %s\n' "$selected_test" >&2; exit 2; }
+        "$selected_test"
+    done
+    printf '%s passed, %s failed\n' "$pass" "$fail"
+    [ "$fail" -eq 0 ]
+    exit
+fi
+
 test_downloads_and_verifies_official_projectivy
 test_downloads_and_verifies_official_aurora
 test_expands_home_relative_build_tool_paths
@@ -1399,9 +1551,9 @@ test_refuses_wrong_model_before_mutation
 test_requires_confirmation_before_mutation
 test_installs_home_before_removing_amazon_packages
 test_refuses_removal_when_projectivy_does_not_become_home
-test_replaces_both_fire_os_home_blockers_under_root
+test_replaces_fire_os_home_while_preserving_stock_settings_bridge
 test_home_switch_failure_restores_fire_os_home_blockers
-test_failure_after_home_blocker_removal_reinstalls_it
+test_failure_after_home_switch_restores_home_blockers
 test_rollback_fails_when_home_blocker_readback_is_wrong
 test_restore_requires_root_for_backed_up_home_blockers
 test_restore_defers_home_blockers_until_generic_packages_finish
@@ -1414,6 +1566,8 @@ test_fails_when_aurora_install_has_no_package_effect
 test_fails_when_requested_package_remains_active
 test_root_retries_reviewed_package_left_active_by_shell
 test_rejects_root_uninstall_success_without_package_effect
+test_releases_exact_parental_profile_owner_before_root_removal
+test_refuses_foreign_profile_owner_without_staging_release_helpers
 test_removal_trace_distinguishes_never_removed_from_later_reappearance
 test_removal_trace_rejects_non_apply_command
 test_adb_shell_cannot_consume_the_remaining_manifest
@@ -1427,6 +1581,8 @@ test_refuses_nonempty_live_ota_collision
 test_refuses_nonempty_live_ota_collision_after_new_root
 test_manifests_are_scoped_and_disjoint
 test_readme_documents_the_complete_workflow
+test_kara_settings_v6_source_and_models
+test_apply_verifies_adb_remains_enabled
 
 printf '%s passed, %s failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

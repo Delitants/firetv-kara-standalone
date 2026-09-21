@@ -5,12 +5,18 @@ PROJECTIVY_REPO=spocky/miproja1
 PROJECTIVY_PACKAGE=com.spocky.projengmenu
 PROJECTIVY_HOME=com.spocky.projengmenu/.ui.home.MainActivity
 AMAZON_HOME_PACKAGE=com.amazon.tv.launcher
+AMAZON_HOME_COMPONENT=com.amazon.tv.launcher/.ui.HomeActivity_vNext
+AMAZON_SETTINGS_COMPONENT=com.amazon.tv.launcher/.ui.MainSettingsActivity
 AMAZON_HOME_STARTER_PACKAGE=com.amazon.firehomestarter
 AMAZON_HOME_STARTER_HOME=com.amazon.firehomestarter/.HomeStarterActivity
+PARENTAL_PACKAGE=com.amazon.tv.parentalcontrols
+PARENTAL_ADMIN_FULL=com.amazon.tv.parentalcontrols/com.amazon.tv.parentalcontrols.PCONAdminReceiver
+PARENTAL_ADMIN_SHORT=com.amazon.tv.parentalcontrols/.PCONAdminReceiver
+PARENTAL_APP_CONTEXT=u:r:amazon_app:s0
 PROJECTIVY_CERT_SHA256=f6697bf4082ee97511e4de07863193884a015b7ab5860430321bda1042b0aadd
 AURORA_PACKAGE=com.aurora.store
 AURORA_CERT_SHA256=4c626157ad02bda3401a7263555f68a79663fc3e13a4d4369a12570941aa280f
-KARA_SETTINGS_SHA256=56f45a726a98a237d91a43e90f34b8a51e1b42a41b397b2d7388c614c1c9a373
+KARA_SETTINGS_SHA256=7b349318e531300f2c6a0e5541918d932fdd36ab62f5e633e2e284592c17aee0
 SUPPORTED_DEVICE=kara
 SUPPORTED_MODEL=AFTKA
 SUPPORTED_BUILD=0035334210436
@@ -29,10 +35,14 @@ KARA_EXPERIMENTAL_ASSET=kara-ghostlock-experimental-newer.arm
 KARA_EXPERIMENTAL_EXPECTED_SHA256=${KARA_EXPERIMENTAL_EXPECTED_SHA256:-d0978d3fcc938150cdc8992243b7a70eedc285ac833ff7a20e99e7b49610a8be}
 KARA_EXPERIMENTAL_CONFIRMATION=RUN-KARA-EXPERIMENTAL-NEWER-I-ACCEPT-WATCHDOG-REBOOT
 KARA_ROOT_WAIT_ATTEMPTS=${KARA_ROOT_WAIT_ATTEMPTS:-20}
+PARENTAL_UID_EXEC_SHA256=e6dd64b64473ac825eace02f0b588aeb377ff815ad067a4d4ce9620f1961cf2b
+PARENTAL_CLEAR_DEX_SHA256=9974b0f45ed1bac1ff4d607246bf09da2550607ee7c95327393002432dc1c2c8
 
 base=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 manifest=${KARA_REMOVE_MANIFEST:-"$base/manifests/remove-user0.txt"}
 privileged_manifest=${KARA_PRIVILEGED_MANIFEST:-"$base/manifests/remove-privileged.txt"}
+parental_uid_exec="$base/helpers/profile-owner/uid-context-exec.arm"
+parental_clear_dex="$base/helpers/profile-owner/clear-profile-owner.dex"
 cache_dir=${KARA_CACHE_DIR:-"$base/cache"}
 backup_root=${KARA_BACKUP_DIR:-"$base/backups"}
 ADB=${ADB:-adb}
@@ -55,6 +65,8 @@ current_backup=
 rollback_needed=0
 rollback_cec_only=0
 bridge_temp=
+parental_remote_exec=
+parental_remote_dex=
 
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || fail "$1 is required"; }
@@ -110,6 +122,9 @@ controller_prerequisite_gate() {
 cleanup() {
     status=$?
     trap - 0 HUP INT TERM
+    if [ -n "$parental_remote_exec" ] || [ -n "$parental_remote_dex" ]; then
+        cleanup_parental_helpers >/dev/null 2>&1 || true
+    fi
     if [ -n "$bridge_temp" ] && [ -n "$bridge" ]; then
         ssh -o BatchMode=yes -o ConnectTimeout=8 "$bridge" rm -f "$bridge_temp" >/dev/null 2>&1 || true
         bridge_temp=
@@ -535,6 +550,12 @@ create_backup_values() {
     cec_value=$(device settings get secure block_cec_standby)
     boot_id=$(device cat /proc/sys/kernel/random/boot_id)
     fingerprint=$(device getprop ro.build.fingerprint)
+    amazon_home_component=$(device cmd package resolve-activity --brief --components --user 0 -n "$AMAZON_HOME_COMPONENT" || true)
+    if [ "$amazon_home_component" = "$AMAZON_HOME_COMPONENT" ]; then
+        amazon_home_component_enabled=1
+    else
+        amazon_home_component_enabled=0
+    fi
     {
         printf 'DEVICE=%s\n' "$actual_device"
         printf 'MODEL=%s\n' "$actual_model"
@@ -545,6 +566,7 @@ create_backup_values() {
         printf 'BLOCK_CEC_STANDBY=%s\n' "$cec_value"
         printf 'BOOT_ID=%s\n' "$boot_id"
         printf 'FINGERPRINT=%s\n' "$fingerprint"
+        printf 'AMAZON_HOME_COMPONENT_ENABLED=%s\n' "$amazon_home_component_enabled"
     } > "$current_backup/state.env"
     device pm list packages --user 0 > "$current_backup/packages-user0.txt"
     device pm list packages -d --user 0 > "$current_backup/packages-disabled-user0.txt"
@@ -577,7 +599,7 @@ install_projectivy() {
 }
 
 install_kara_settings() {
-    settings_apk="$base/app/kara-settings/kara-settings-v5-signed.apk"
+    settings_apk="$base/app/kara-settings/kara-settings-v6-signed.apk"
     [ -f "$settings_apk" ] || fail 'Kara Settings APK is missing'
     [ "$(sha256_file "$settings_apk")" = "$KARA_SETTINGS_SHA256" ] || fail 'Kara Settings APK hash mismatch'
     install_result=$(adb_install_file "$settings_apk" | tr -d '\r') || fail 'Kara Settings installation failed'
@@ -591,6 +613,50 @@ install_aurora() {
     [ -f "$aurora_apk" ] || fail 'verified Aurora Store APK is missing'
     install_result=$(adb_install_file "$aurora_apk" | tr -d '\r') || fail 'Aurora Store installation failed'
     printf '%s\n' "$install_result" | tail -n 1 | grep -Fx Success >/dev/null || fail 'Aurora Store installation did not report Success'
+}
+
+stock_settings_packages() {
+    printf '%s\n' \
+        com.amazon.adep \
+        com.amazon.audiohome \
+        com.amazon.ceviche \
+        com.amazon.dcp \
+        com.amazon.device.messaging \
+        com.amazon.device.sale.service \
+        com.amazon.ftv.screensaver \
+        com.amazon.tv.launcher \
+        com.amazon.vizzini \
+        com.amazon.whasettings
+}
+
+verify_stock_settings_bridge() {
+    active=$(device pm list packages --user 0)
+    for settings_package in $(stock_settings_packages); do
+        printf '%s\n' "$active" | grep -Fx "package:$settings_package" >/dev/null ||
+            fail "stock Fire TV settings support package is not active: $settings_package"
+    done
+    settings_bridge=$(device cmd package resolve-activity --brief --components --user 0 -n "$AMAZON_SETTINGS_COMPONENT")
+    [ "$settings_bridge" = "$AMAZON_SETTINGS_COMPONENT" ] ||
+        fail "stock Fire TV settings bridge is unavailable: $settings_bridge"
+}
+
+restore_stock_settings_bridge() {
+    active=$(device pm list packages --user 0)
+    disabled=$(device pm list packages -d --user 0)
+    for settings_package in $(stock_settings_packages); do
+        if ! printf '%s\n' "$active" | grep -Fx "package:$settings_package" >/dev/null; then
+            restore_output=$(adb_call shell cmd package install-existing --user 0 "$settings_package" 2>&1) || {
+                printf '%s\n' "$restore_output" >&2
+                fail "could not register stock settings support package: $settings_package"
+            }
+        fi
+        if printf '%s\n' "$disabled" | grep -Fx "package:$settings_package" >/dev/null; then
+            root_command "runcon u:r:shell:s0 /system/bin/pm enable --user 0 $settings_package" >/dev/null ||
+                fail "could not enable stock settings support package: $settings_package"
+        fi
+    done
+    verify_stock_settings_bridge
+    printf 'STOCK_SETTINGS_SUPPORT=PASS\n'
 }
 
 verify_root_helper() {
@@ -801,6 +867,92 @@ root_command() {
     device "$root_helper --cmd \"$fixed_command\""
 }
 
+cleanup_parental_helpers() {
+    [ -n "$parental_remote_exec" ] || return 0
+    [ -n "$parental_remote_dex" ] || return 0
+    printf '%s\n' "$parental_remote_exec" | grep -Eq '^/data/local/tmp/kara-parental-uid-exec-[0-9]+$' || return 1
+    printf '%s\n' "$parental_remote_dex" | grep -Eq '^/data/local/tmp/kara-clear-profile-owner-[0-9]+[.]dex$' || return 1
+    adb_call shell rm -f "$parental_remote_exec" "$parental_remote_dex"
+    parental_remote_exec=
+    parental_remote_dex=
+}
+
+profile_owner_component() {
+    printf '%s\n' "$1" | awk '
+        /Profile Owner/ { in_profile_owner = 1; next }
+        in_profile_owner && /admin=ComponentInfo\{/ {
+            line = $0
+            sub(/^.*admin=ComponentInfo\{/, "", line)
+            sub(/\}.*$/, "", line)
+            print line
+            exit
+        }
+        in_profile_owner && /^[^[:space:]]/ { in_profile_owner = 0 }
+    '
+}
+
+release_parental_profile_owner() {
+    policy_before=$(device dumpsys device_policy) || fail 'could not inspect DevicePolicyManager before parental-controls removal'
+    owner_component=$(profile_owner_component "$policy_before")
+    [ -n "$owner_component" ] || return 0
+    case "$owner_component" in
+        "$PARENTAL_ADMIN_FULL"|"$PARENTAL_ADMIN_SHORT") : ;;
+        *) fail "unexpected profile owner; refusing parental-controls release: $owner_component" ;;
+    esac
+
+    uid_line=$(device pm list packages -U "$PARENTAL_PACKAGE") || fail 'could not resolve parental-controls UID'
+    parental_uid=$(printf '%s\n' "$uid_line" | sed -n "s/^package:$PARENTAL_PACKAGE uid:\([0-9][0-9]*\)$/\1/p")
+    case "$parental_uid" in ''|*[!0-9]*) fail 'parental-controls UID is missing or invalid' ;; esac
+    [ "$parental_uid" -ge 10000 ] && [ "$parental_uid" -le 19999 ] ||
+        fail "parental-controls UID is outside the application range: $parental_uid"
+    parental_path=$(device pm path "$PARENTAL_PACKAGE") || fail 'could not resolve parental-controls APK path'
+    printf '%s\n' "$parental_path" | grep -Eq '^package:/system/priv-app/[^ ]+[.]apk$' ||
+        fail "parental-controls is not an immutable privileged app: $parental_path"
+
+    [ -f "$parental_uid_exec" ] || fail 'parental-controls UID launcher is missing'
+    [ -f "$parental_clear_dex" ] || fail 'parental-controls clearProfileOwner helper is missing'
+    [ "$(sha256_file "$parental_uid_exec")" = "$PARENTAL_UID_EXEC_SHA256" ] ||
+        fail 'parental-controls UID launcher hash mismatch'
+    [ "$(sha256_file "$parental_clear_dex")" = "$PARENTAL_CLEAR_DEX_SHA256" ] ||
+        fail 'parental-controls clearProfileOwner helper hash mismatch'
+
+    printf '%s\n' "$policy_before" > "$current_backup/device-policy-before-parental.txt"
+    root_command 'cat /data/system/users/0/profile_owner.xml 2>/dev/null' > "$current_backup/profile_owner.xml" ||
+        fail 'could not back up profile_owner.xml'
+    root_command 'cat /data/system/device_policies.xml 2>/dev/null' > "$current_backup/device_policies.xml" ||
+        fail 'could not back up device_policies.xml'
+    [ -s "$current_backup/profile_owner.xml" ] || fail 'profile-owner backup is empty'
+
+    parental_remote_exec="/data/local/tmp/kara-parental-uid-exec-$$"
+    parental_remote_dex="/data/local/tmp/kara-clear-profile-owner-$$.dex"
+    adb_push_file "$parental_uid_exec" "$parental_remote_exec" >/dev/null ||
+        fail 'could not stage parental-controls UID launcher'
+    adb_push_file "$parental_clear_dex" "$parental_remote_dex" >/dev/null ||
+        fail 'could not stage parental-controls clearProfileOwner helper'
+    device chmod 700 "$parental_remote_exec" >/dev/null ||
+        fail 'could not make parental-controls UID launcher executable'
+
+    identity_proof=$(root_command "$parental_remote_exec $parental_uid $PARENTAL_APP_CONTEXT /system/bin/id id") ||
+        fail 'parental-controls UID/context proof failed'
+    printf '%s\n' "$identity_proof" | grep -E "(^| )uid=$parental_uid(\\([^)]*\\))?( |$)" >/dev/null ||
+        fail 'parental-controls UID/context proof returned the wrong UID'
+    printf '%s\n' "$identity_proof" | grep -E "(^| )context=$PARENTAL_APP_CONTEXT( |$)" >/dev/null ||
+        fail 'parental-controls UID/context proof returned the wrong SELinux context'
+
+    clear_output=$(root_command "CLASSPATH=$parental_remote_dex $parental_remote_exec $parental_uid $PARENTAL_APP_CONTEXT /system/bin/app_process app_process /system/bin ClearProfileOwner") ||
+        fail 'clearProfileOwner invocation failed'
+    printf '%s\n' "$clear_output" | grep -Fx 'clearProfileOwner: completed' >/dev/null ||
+        fail 'clearProfileOwner did not report completion'
+    policy_after=$(device dumpsys device_policy) || fail 'could not verify DevicePolicyManager after parental-controls release'
+    [ -z "$(profile_owner_component "$policy_after")" ] ||
+        fail 'parental-controls profile owner remains after clearProfileOwner'
+    printf '%s\n' "$policy_after" | grep -F "$PARENTAL_PACKAGE" >/dev/null &&
+        fail 'parental-controls remains registered in DevicePolicyManager after clearProfileOwner'
+
+    cleanup_parental_helpers || fail 'could not remove parental-controls release helpers'
+    printf 'PARENTAL_PROFILE_OWNER_RELEASE=PASS uid=%s\n' "$parental_uid"
+}
+
 trace_adep_state() {
     [ "$trace_removals" -eq 1 ] || return 0
     trace_phase=$1
@@ -834,7 +986,7 @@ remove_reviewed_packages() {
         [ -n "$package_name" ] || continue
         validate_amazon_package "$package_name"
         case "$package_name" in
-            "$AMAZON_HOME_PACKAGE"|"$AMAZON_HOME_STARTER_PACKAGE") continue ;;
+            "$AMAZON_HOME_PACKAGE"|"$AMAZON_HOME_STARTER_PACKAGE"|"$PARENTAL_PACKAGE") continue ;;
         esac
         adb_call shell pm uninstall -k --user 0 "$package_name" >/dev/null || true
         trace_adep_state shell "$package_name"
@@ -846,7 +998,7 @@ remove_reviewed_packages() {
         [ -n "$package_name" ] || continue
         validate_amazon_package "$package_name"
         case "$package_name" in
-            "$AMAZON_HOME_PACKAGE"|"$AMAZON_HOME_STARTER_PACKAGE") continue ;;
+            "$AMAZON_HOME_PACKAGE"|"$AMAZON_HOME_STARTER_PACKAGE"|"$PARENTAL_PACKAGE") continue ;;
         esac
         if printf '%s\n' "$active" | grep -Fx "package:$package_name" >/dev/null; then
             remove_output=$(root_command "runcon u:r:shell:s0 /system/bin/pm uninstall -k --user 0 $package_name") ||
@@ -862,11 +1014,40 @@ remove_reviewed_packages() {
     trace_adep_state final none "$active"
     while IFS= read -r package_name; do
         [ -n "$package_name" ] || continue
+        [ "$package_name" != "$PARENTAL_PACKAGE" ] || continue
         if printf '%s\n' "$active" | grep -Fx "package:$package_name" >/dev/null; then
             fail "removed package is active after root fallback: $package_name"
         fi
     done < "$manifest"
     printf 'ROOT_FALLBACK_REMOVAL=PASS count=%s\n' "$root_fallback_count"
+}
+
+remove_parental_controls_last() {
+    active=$(device pm list packages --user 0)
+    if ! printf '%s\n' "$active" | grep -Fx "package:$PARENTAL_PACKAGE" >/dev/null; then
+        printf 'PARENTAL_CONTROLS_REMOVAL=PASS state=already-absent\n'
+        return
+    fi
+
+    policy_before=$(device dumpsys device_policy) ||
+        fail 'could not inspect DevicePolicyManager before parental-controls removal'
+    owner_component=$(profile_owner_component "$policy_before")
+    if [ -n "$owner_component" ]; then
+        release_parental_profile_owner
+    fi
+
+    adb_call shell pm uninstall -k --user 0 "$PARENTAL_PACKAGE" >/dev/null || true
+    active=$(device pm list packages --user 0)
+    if printf '%s\n' "$active" | grep -Fx "package:$PARENTAL_PACKAGE" >/dev/null; then
+        remove_output=$(root_command "runcon u:r:shell:s0 /system/bin/pm uninstall -k --user 0 $PARENTAL_PACKAGE") ||
+            fail "root fallback removal failed: $PARENTAL_PACKAGE"
+        printf '%s\n' "$remove_output" | tr -d '\r' | tail -n 1 | grep -Fx Success >/dev/null ||
+            fail "root fallback removal did not report Success: $PARENTAL_PACKAGE"
+    fi
+    active=$(device pm list packages --user 0)
+    printf '%s\n' "$active" | grep -Fx "package:$PARENTAL_PACKAGE" >/dev/null &&
+        fail "removed package is active after root fallback: $PARENTAL_PACKAGE"
+    printf 'PARENTAL_CONTROLS_REMOVAL=PASS state=removed\n'
 }
 
 disable_fire_os_home_blocker() {
@@ -891,10 +1072,10 @@ activate_projectivy_home() {
     printf '%s\n' "$direct_start" | grep -F 'Status: ok' >/dev/null ||
         fail 'Projectivy direct activity start did not report success'
 
-    # Fire OS assigns Amazon's launcher and Home Starter higher resolver
-    # priorities than a user-installed launcher. They must be disabled from
-    # the proven root/shell context before set-home-activity can take effect.
-    disable_fire_os_home_blocker "$AMAZON_HOME_PACKAGE"
+    # Keep Amazon's privileged settings bridge installed, but disable only its
+    # HOME activity. Display & Sounds is guarded by LAUNCHER_SETTINGS and
+    # cannot be opened directly by an ordinary replacement launcher.
+    disable_fire_os_home_blocker "$AMAZON_HOME_COMPONENT"
     disable_fire_os_home_blocker "$AMAZON_HOME_STARTER_PACKAGE"
 
     root_command "runcon u:r:shell:s0 /system/bin/cmd package set-home-activity --user 0 $PROJECTIVY_HOME" >/dev/null ||
@@ -905,8 +1086,8 @@ activate_projectivy_home() {
     selected_home=$(device cmd package resolve-activity --brief --components --user 0 -a android.intent.action.MAIN -c android.intent.category.HOME)
     [ "$selected_home" = "$PROJECTIVY_HOME" ] || fail "Projectivy did not remain HOME after launch: $selected_home"
 
-    remove_fire_os_home_blocker "$AMAZON_HOME_PACKAGE"
     remove_fire_os_home_blocker "$AMAZON_HOME_STARTER_PACKAGE"
+    verify_stock_settings_bridge
     printf 'PROJECTIVY_HOME_GATE=PASS\n'
 }
 
@@ -931,10 +1112,12 @@ apply_changes() {
     install_projectivy
     install_aurora
     install_kara_settings
+    restore_stock_settings_bridge
     activate_projectivy_home
     remove_reviewed_packages
     remove_privileged_packages
     adb_call shell settings put global ota_disable_automatic_update 1
+    remove_parental_controls_last
     verify_device
     rollback_needed=0
     printf 'APPLY_GATE=PASS\n'
@@ -949,6 +1132,7 @@ audit_device() {
     printf 'VERIFIED_BOOT=%s\n' "$(device getprop ro.boot.verifiedbootstate)"
     printf 'FLASH_LOCKED=%s\n' "$(device getprop ro.boot.flash.locked)"
     printf 'HOME=%s\n' "$(device cmd package resolve-activity --brief --components --user 0 -a android.intent.action.MAIN -c android.intent.category.HOME)"
+    printf 'ADB_ENABLED=%s\n' "$(device settings get global adb_enabled)"
     if [ "$actual_device/$actual_model/$actual_build/API$actual_api" = "$SUPPORTED_DEVICE/$SUPPORTED_MODEL/$SUPPORTED_BUILD/API$SUPPORTED_API" ]; then
         printf 'SUPPORTED_MUTATION_TARGET=YES\n'
     else
@@ -968,11 +1152,14 @@ verify_device() {
     [ "$home" = "$PROJECTIVY_HOME" ] || fail "Projectivy is not HOME: $home"
     ota=$(device settings get global ota_disable_automatic_update)
     [ "$ota" = 1 ] || fail 'automatic OTA setting is not disabled'
+    adb_enabled=$(device settings get global adb_enabled)
+    [ "$adb_enabled" = 1 ] || fail 'ADB debugging is not enabled after apply'
     active=$(device pm list packages --user 0)
     for required_package in "$PROJECTIVY_PACKAGE" "$AURORA_PACKAGE" local.kara.settingsredirector; do
         printf '%s\n' "$active" | grep -Fx "package:$required_package" >/dev/null ||
             fail "required package is not active: $required_package"
     done
+    verify_stock_settings_bridge
     while IFS= read -r package_name; do
         [ -n "$package_name" ] || continue
         if printf '%s\n' "$active" | grep -Fx "package:$package_name" >/dev/null; then
@@ -1063,6 +1250,22 @@ restore_backup() {
     fi
     expected_restored_home=$old_home
     if [ -n "$old_home" ]; then
+        old_amazon_home_component_enabled=$(sed -n 's/^AMAZON_HOME_COMPONENT_ENABLED=//p' "$state")
+        if [ -z "$old_amazon_home_component_enabled" ]; then
+            case "$old_home" in
+                "$AMAZON_HOME_COMPONENT"|"$AMAZON_HOME_STARTER_HOME") old_amazon_home_component_enabled=1 ;;
+                *) old_amazon_home_component_enabled=0 ;;
+            esac
+        fi
+        if grep -Fx "package:$AMAZON_HOME_PACKAGE" "$packages" >/dev/null; then
+            case "$old_amazon_home_component_enabled" in
+                1) root_command "runcon u:r:shell:s0 /system/bin/pm enable --user 0 $AMAZON_HOME_COMPONENT" >/dev/null ||
+                    fail 'could not restore Amazon HOME component enabled state' ;;
+                0) root_command "runcon u:r:shell:s0 /system/bin/pm disable --user 0 $AMAZON_HOME_COMPONENT" >/dev/null ||
+                    fail 'could not restore Amazon HOME component disabled state' ;;
+                *) fail 'invalid Amazon HOME component state in backup' ;;
+            esac
+        fi
         current_restored_home=$(device cmd package resolve-activity --brief --components --user 0 -a android.intent.action.MAIN -c android.intent.category.HOME)
         if [ "$old_home" = "$AMAZON_HOME_PACKAGE/.ui.HomeActivity_vNext" ] &&
             [ "$current_restored_home" = "$AMAZON_HOME_STARTER_HOME" ] &&
