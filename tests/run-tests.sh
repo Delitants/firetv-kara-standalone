@@ -964,10 +964,10 @@ test_root_failure_aborts_before_package_mutation_and_rolls_back_cec() {
 
 test_ssh_bridge_stages_every_local_payload() {
     new_fixture
-    if run_tool --bridge root@test --yes apply >"$fixture/out" 2>&1 &&
+    if run_tool --bridge root@test --serial USB123 --yes apply >"$fixture/out" 2>&1 &&
         [ "$(grep -c '^scp ' "$fixture/bridge.log")" -eq 4 ] &&
-        grep -E "push /tmp/kara-tool-[0-9]+-kara-ghostlock-PS7713-5443.arm /data/local/tmp/kara-ghostlock-[0-9]+" "$fixture/adb.log" >/dev/null &&
-        [ "$(grep -c "install -r /tmp/kara-tool-" "$fixture/adb.log")" -eq 3 ] &&
+        grep -E "^-s USB123 push /tmp/kara-tool-[0-9]+-kara-ghostlock-PS7713-5443.arm /data/local/tmp/kara-ghostlock-[0-9]+" "$fixture/adb.log" >/dev/null &&
+        [ "$(grep -c "^-s USB123 install -r /tmp/kara-tool-" "$fixture/adb.log")" -eq 3 ] &&
         [ "$(grep -c "ssh root@test rm -f /tmp/kara-tool-" "$fixture/bridge.log")" -eq 4 ]
     then
         ok 'SSH bridge stages and cleans every local payload'

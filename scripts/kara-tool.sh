@@ -255,7 +255,7 @@ adb_install_file() {
     if [ -n "$bridge" ]; then
         stage_bridge_file "$local_file"
         install_status=0
-        remote_adb adb install -r "$bridge_temp" || install_status=$?
+        adb_call install -r "$bridge_temp" || install_status=$?
         clear_bridge_file
         return "$install_status"
     fi
@@ -268,7 +268,7 @@ adb_push_file() {
     if [ -n "$bridge" ]; then
         stage_bridge_file "$local_file"
         push_status=0
-        remote_adb adb push "$bridge_temp" "$device_path" || push_status=$?
+        adb_call push "$bridge_temp" "$device_path" || push_status=$?
         clear_bridge_file
         return "$push_status"
     fi
