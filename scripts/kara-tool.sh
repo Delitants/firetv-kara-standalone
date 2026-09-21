@@ -903,8 +903,9 @@ release_parental_profile_owner() {
     uid_line=$(device pm list packages -U "$PARENTAL_PACKAGE") || fail 'could not resolve parental-controls UID'
     parental_uid=$(printf '%s\n' "$uid_line" | sed -n "s/^package:$PARENTAL_PACKAGE uid:\([0-9][0-9]*\)$/\1/p")
     case "$parental_uid" in ''|*[!0-9]*) fail 'parental-controls UID is missing or invalid' ;; esac
-    [ "$parental_uid" -ge 10000 ] && [ "$parental_uid" -le 19999 ] ||
+    if [ "$parental_uid" -lt 10000 ] || [ "$parental_uid" -gt 19999 ]; then
         fail "parental-controls UID is outside the application range: $parental_uid"
+    fi
     parental_path=$(device pm path "$PARENTAL_PACKAGE") || fail 'could not resolve parental-controls APK path'
     printf '%s\n' "$parental_path" | grep -Eq '^package:/system/priv-app/[^ ]+[.]apk$' ||
         fail "parental-controls is not an immutable privileged app: $parental_path"
