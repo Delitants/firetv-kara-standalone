@@ -3,8 +3,9 @@
 This toolkit converts one exact Fire TV build to a Projectivy-based setup. The
 `apply` command downloads and authenticates the complete kara exploit, obtains
 temporary root, contains a staged OTA, installs Projectivy Launcher and Aurora
-Store, installs the included Kara Settings repair, switches HOME, and removes
-the reviewed non-core Amazon packages for Android user 0. It deliberately keeps
+Store, installs and selects LeanKey Keyboard for reliable TV-remote text entry,
+installs the included Kara Settings repair, switches HOME, and removes the
+reviewed non-core Amazon packages for Android user 0. It deliberately keeps
 the smallest verified stock support set needed for Fire TV display, audio,
 network, app-management, controller, device, and accessibility settings.
 
@@ -179,6 +180,26 @@ authorized. From the controller computer, replace `LINUX_HOST` and
 Downloads are authenticated on the controller, copied to a randomized `/tmp`
 path on the Linux host, passed to its ADB, and removed from the host afterward.
 
+## Install only the TV keyboard
+
+If Projectivy and Aurora Store are already installed, repair text entry without
+running the exploit or changing HOME, OTA, or Amazon packages:
+
+```sh
+./scripts/kara-tool.sh --serial FIRE_TV_IP:5555 --yes install-keyboard
+```
+
+The command accepts only the exact supported `kara/AFTKA` build, downloads and
+authenticates the pinned LeanKey APK, preserves Amazon FireTVIME, records the
+current default IME, installs LeanKey, enables it, selects it, and reads the
+setting back. If activation fails, it restores the previous IME and removes
+LeanKey when LeanKey was not already installed. Manual rollback is:
+
+```sh
+adb -s FIRE_TV_IP:5555 shell ime enable com.amazon.tv.ime/.FireTVIME
+adb -s FIRE_TV_IP:5555 shell ime set com.amazon.tv.ime/.FireTVIME
+```
+
 ## What `apply` does
 
 The order is fail-closed:
@@ -186,8 +207,8 @@ The order is fail-closed:
 1. Verify the exact device, model, build, API, kernel, ABI, CPU count, shell
    uid, and enforcing SELinux state. A supplied exact-path root helper may
    resume from permissive SELinux only after its uid-0 proof is verified.
-2. Record HOME, package inventories, firmware identity, OTA preference, CEC
-   guard, and boot ID in a timestamped local backup.
+2. Record HOME, default input method, package inventories, firmware identity,
+   OTA preference, CEC guard, and boot ID in a timestamped local backup.
 3. Download the exact exploit release and require its tag, filename, GitHub
    URL, release digest, and independently pinned live-tested SHA-256.
 4. Stage it at a per-run device path, enable the CEC reboot guard, and run its
@@ -196,8 +217,9 @@ The order is fail-closed:
    the root proof, exact daemon executable path, and unchanged firmware.
 6. Resolve only the known empty-directory OTA collision with `rmdir`, then
    require the staged OTA directory and both recovery command paths to be absent.
-7. Download and authenticate Projectivy and Aurora Store, install them and Kara
-   Settings, then re-register and enable the exact stock packages required by
+7. Download and authenticate Projectivy, Aurora Store, and the pinned LeanKey
+   Keyboard; install them and Kara Settings; select and read back LeanKey as the
+   default IME; then re-register and enable the exact stock packages required by
    the Fire TV settings bridge.
 8. Direct-start Projectivy, root-disable only Amazon launcher's HOME activity
    plus Fire Home Starter, set and read back Projectivy as HOME, and remove Fire
@@ -208,7 +230,7 @@ The order is fail-closed:
    helper, and the full removal manifest is read back.
 10. Set the OTA preference, release only the exact Amazon parental-controls
     profile owner with hash-pinned helpers, remove parental controls last, and
-    verify HOME, ADB, OTA, apps, removals, and the stock settings bridge.
+    verify HOME, ADB, OTA, apps, LeanKey, removals, and the stock settings bridge.
 
 `--root-helper /data/local/tmp/NAME` remains available for advanced recovery.
 It bypasses exploit launch only after providing the same uid-0, build, and exact
@@ -315,8 +337,19 @@ Aurora Store is downloaded from AuroraOSS's official catalog. The script
 requires the standard APK under `/downloads/AuroraStore/Release/` and verifies
 its URL, package name, version, API compatibility, and signing certificate.
 
-Neither third-party APK is stored in this repository. No other app store or
-updater is installed by this toolkit.
+LeanKey Keyboard is downloaded from the developer's
+[`yuliskov/LeanKeyboard`](https://github.com/yuliskov/LeanKeyboard/releases/tag/6.1.31)
+release. Because the upstream release does not publish an asset digest and its
+legacy developer certificate uses an old SHA1/DSA key, this toolkit permits
+only the device-tested 6.1.31 asset and requires its exact filename, trusted
+GitHub URL, package, version, Android compatibility, APK SHA-256
+`5a90529fcae55c664128fb36e752f90e84d158266eced85084594c1d336a1468`,
+and certificate SHA-256
+`955ef7b51f8fb9e4036678471a9edea0bbb3bb9b02753f796d9d6bf19dc2002d`.
+Amazon FireTVIME remains installed for rollback.
+
+No third-party APK is stored in this repository. No other app store or updater
+is installed by this toolkit.
 
 ## Stock settings and Kara Settings
 
@@ -341,11 +374,13 @@ build notes, and the reviewed APK hash are under
 audit                  Read-only identity and launcher inventory
 download-projectivy    Authenticate and cache Projectivy
 download-aurora        Authenticate and cache Aurora Store
+download-keyboard      Authenticate and cache pinned LeanKey Keyboard
 download-exploit       Authenticate and cache the exact kara exploit
 download-experimental  Authenticate and cache the unvalidated newer-build exploit
 probe-newer            Run only safe compatibility checks on an exact newer build
 test-newer             Make one acknowledged live root attempt on that build
 backup                 Save restorable user-0 state
+install-keyboard       Install/select LeanKey without exploit or debloat
 apply                  Run the complete backed-up workflow
 verify                 Verify the durable configuration
 restore                Restore a named backup

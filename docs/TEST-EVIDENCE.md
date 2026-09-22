@@ -140,5 +140,34 @@ activity. The APK exercised on-device has SHA-256:
 This live pass validates the Settings bridge and Kara Settings UI. It does not
 claim a fresh end-to-end `apply`, root-assisted HOME-component disable, reboot,
 or profile-owner release on the reference Stick. Those controller paths are
-covered by the 68-test offline suite; profile-owner removal remains gated to
+covered by the offline suite; profile-owner removal remains gated to
 the exact expected component, dynamic UID/context, and hash-pinned helpers.
+
+## Live LeanKey and Aurora validation — 2026-09-21
+
+On the same USB-connected `kara/AFTKA` target, the standalone keyboard command
+downloaded the pinned LeanKey 6.1.31 APK, verified SHA-256
+`5a90529fcae55c664128fb36e752f90e84d158266eced85084594c1d336a1468`,
+installed package `org.liskovsoft.androidtv.rukeyboard`, waited for Fire OS to
+register its input-method service, enabled that service, selected it, and read
+back this exact default IME:
+
+```text
+org.liskovsoft.androidtv.rukeyboard/com.liskovsoft.leankeyboard.ime.LeanbackImeService
+```
+
+Amazon FireTVIME remained enabled. A fresh absence-to-install test reported:
+
+```text
+KEYBOARD_GATE=PASS previous=com.amazon.tv.ime/.FireTVIME current=org.liskovsoft.androidtv.rukeyboard/com.liskovsoft.leankeyboard.ime.LeanbackImeService
+```
+
+Aurora Store was then force-stopped and reopened. Its Search control opened
+LeanKey, a D-pad center click on the focused `t` key inserted `t` into Aurora's
+search field, live suggestions appeared, and navigating with D-pad Right to
+LeanKey's SEARCH action and clicking it dismissed the IME and loaded matching
+Aurora results. Projectivy remained the resolved HOME throughout.
+
+The final offline controller suite reports `74 passed, 0 failed`, including
+APK provenance, delayed Fire OS IME discovery, activation readback, failure
+rollback, full-apply rollback, and SSH-bridge payload staging.

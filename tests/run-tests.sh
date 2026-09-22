@@ -14,6 +14,7 @@ new_fixture() {
     mkdir -p "$fixture/bin" "$fixture/cache"
     printf 'fixture official Projectivy APK\n' > "$fixture/projectivy.apk"
     printf 'fixture official Aurora Store APK\n' > "$fixture/aurora.apk"
+    printf 'fixture official LeanKey Keyboard APK\n' > "$fixture/leankey.apk"
     printf 'fixture kara exploit ELF\n' > "$fixture/kara-exploit.arm"
     printf 'fixture experimental kara exploit ELF\n' > "$fixture/kara-experimental.arm"
     printf 'package:com.amazon.tv.launcher\npackage:com.amazon.firehomestarter\npackage:com.amazon.device.software.ota\npackage:com.amazon.adep\npackage:com.amazon.audiohome\npackage:com.amazon.ceviche\npackage:com.amazon.dcp\npackage:com.amazon.device.messaging\npackage:com.amazon.device.sale.service\npackage:com.amazon.ftv.screensaver\npackage:com.amazon.vizzini\npackage:com.amazon.whasettings\n' > "$fixture/active.packages"
@@ -22,6 +23,8 @@ new_fixture() {
     printf '0\n' > "$fixture/ota.state"
     printf '0\n' > "$fixture/cec.state"
     printf '%s\n' "${FAKE_ADB_ENABLED:-1}" > "$fixture/adb-enabled.state"
+    printf 'com.amazon.tv.ime/.FireTVIME\n' > "$fixture/default-ime.state"
+    printf '0\n' > "$fixture/ime-list.calls"
     printf '0\n' > "$fixture/root.state"
     printf '%s\n' "${FAKE_PROFILE_OWNER_STATE:-absent}" > "$fixture/profile-owner.state"
     printf 'enabled\n' > "$fixture/amazon-launcher.state"
@@ -31,6 +34,7 @@ new_fixture() {
     printf '%s\n' "${FAKE_OTA_LIVE_PATH:-missing}" > "$fixture/ota-live-path.state"
     printf '%s\n' "${FAKE_OTA_HELD_PATH:-missing}" > "$fixture/ota-held-path.state"
     fixture_digest=$(shasum -a 256 "$fixture/projectivy.apk" | awk '{print $1}')
+    fixture_keyboard_digest=$(shasum -a 256 "$fixture/leankey.apk" | awk '{print $1}')
     fixture_exploit_digest=$(shasum -a 256 "$fixture/kara-exploit.arm" | awk '{print $1}')
     fixture_experimental_digest=$(shasum -a 256 "$fixture/kara-experimental.arm" | awk '{print $1}')
     exploit_duplicate=
@@ -42,6 +46,9 @@ new_fixture() {
 EOF
     cat > "$fixture/exploit-release.json" <<EOF
 {"tag_name":"kara-PS7713-5443-v1","assets":[{"name":"${FAKE_EXPLOIT_ASSET_NAME:-kara-ghostlock-PS7713-5443.arm}","browser_download_url":"${FAKE_EXPLOIT_URL:-https://github.com/Delitants/GhostLock/releases/download/kara-PS7713-5443-v1/kara-ghostlock-PS7713-5443.arm}","digest":"${FAKE_EXPLOIT_DIGEST:-sha256:$fixture_exploit_digest}"}$exploit_duplicate]}
+EOF
+    cat > "$fixture/keyboard-release.json" <<'EOF'
+{"tag_name":"6.1.31","assets":[{"name":"LeanKeyboard_v6.1.31_playstore_r.apk","browser_download_url":"https://github.com/yuliskov/LeanKeyboard/releases/download/6.1.31/LeanKeyboard_v6.1.31_playstore_r.apk","size":2753808}]}
 EOF
     cat > "$fixture/experimental-release.json" <<EOF
 {"tag_name":"kara-experimental-newer-v1","assets":[{"name":"kara-ghostlock-experimental-newer.arm","browser_download_url":"https://github.com/Delitants/GhostLock/releases/download/kara-experimental-newer-v1/kara-ghostlock-experimental-newer.arm","digest":"sha256:$fixture_experimental_digest"}]}
@@ -73,6 +80,10 @@ case "$url" in
         cp "$FAKE_AURORA_RELEASE_JSON" "$out" ;;
     https://auroraoss.com/downloads/AuroraStore/Release/AuroraStore-*.apk)
         cp "$FAKE_AURORA_APK" "$out" ;;
+    https://api.github.com/repos/yuliskov/LeanKeyboard/releases/tags/6.1.31)
+        cp "$FAKE_KEYBOARD_RELEASE_JSON" "$out" ;;
+    https://github.com/yuliskov/LeanKeyboard/releases/download/6.1.31/LeanKeyboard_v6.1.31_playstore_r.apk)
+        cp "$FAKE_KEYBOARD_APK" "$out" ;;
     https://api.github.com/repos/Delitants/GhostLock/releases/tags/kara-PS7713-5443-v1)
         cp "$FAKE_EXPLOIT_RELEASE_JSON" "$out" ;;
     https://github.com/Delitants/GhostLock/releases/download/kara-PS7713-5443-v1/kara-ghostlock-PS7713-5443.arm)
@@ -88,6 +99,11 @@ EOF
     cat > "$fixture/bin/aapt" <<'EOF'
 #!/bin/sh
 case "$*" in
+*leankey.apk.part) cat <<'OUT'
+package: name='org.liskovsoft.androidtv.rukeyboard' versionCode='201' versionName='6.1.31'
+sdkVersion:'14'
+OUT
+;;
 *aurora.apk.part) cat <<'OUT'
 package: name='com.aurora.store' versionCode='76' versionName='4.8.4'
 sdkVersion:'23'
@@ -113,6 +129,10 @@ else
     signer_prefix='Signer #1'
 fi
 case "$*" in
+*leankey.apk.part)
+    printf '%s certificate DN: CN=Yuriy Lyskov, OU=Mobile Development, O=LiskovSoft, C=UA\n' "$signer_prefix"
+    printf '%s certificate SHA-256 digest: 955ef7b51f8fb9e4036678471a9edea0bbb3bb9b02753f796d9d6bf19dc2002d\n' "$signer_prefix"
+;;
 *aurora.apk.part)
     printf '%s certificate DN: CN=Rahul Patel, C=IN\n' "$signer_prefix"
     printf '%s certificate SHA-256 digest: 4c626157ad02bda3401a7263555f68a79663fc3e13a4d4369a12570941aa280f\n' "$signer_prefix"
@@ -149,6 +169,16 @@ case "$*" in
     'shell cat /sys/devices/system/cpu/online') printf '%s\n' "${FAKE_CPU_ONLINE:-0-3}" ;;
     'shell id -u') printf '%s\n' "${FAKE_UID:-2000}" ;;
     'shell getenforce') printf '%s\n' "${FAKE_SELINUX:-Enforcing}" ;;
+    'shell settings get secure default_input_method') cat "$FAKE_DEFAULT_IME_STATE" ;;
+    'shell ime list -a -s')
+        ime_list_calls=$(cat "$FAKE_IME_LIST_CALLS")
+        ime_list_calls=$((ime_list_calls + 1))
+        printf '%s\n' "$ime_list_calls" > "$FAKE_IME_LIST_CALLS"
+        printf 'com.amazon.tv.ime/.FireTVIME\n'
+        if grep -Fx 'package:org.liskovsoft.androidtv.rukeyboard' "$FAKE_ACTIVE_PACKAGES" >/dev/null &&
+            [ "$ime_list_calls" -ge "${FAKE_IME_DISCOVERY_DELAY:-0}" ]; then
+            printf 'org.liskovsoft.androidtv.rukeyboard/com.liskovsoft.leankeyboard.ime.LeanbackImeService\n'
+        fi ;;
     'shell cat /proc/sys/kernel/random/boot_id') printf '11111111-2222-3333-4444-555555555555\n' ;;
     'shell cmd package resolve-activity --brief --components --user 0 -a android.intent.action.MAIN -c android.intent.category.HOME')
         if [ "${FAKE_FIREHOME_RESOLVER_PRIORITY:-0}" = 1 ] &&
@@ -203,6 +233,31 @@ case "$*" in
         if [ "${FAKE_INSTALL_AURORA_EFFECT:-1}" = 1 ]; then
             printf 'package:com.aurora.store\n' >> "$FAKE_ACTIVE_PACKAGES"
         fi
+        printf 'Success\n' ;;
+    install\ -r\ *LeanKeyboard*)
+        if ! grep -Fx 'package:org.liskovsoft.androidtv.rukeyboard' "$FAKE_ACTIVE_PACKAGES" >/dev/null; then
+            printf 'package:org.liskovsoft.androidtv.rukeyboard\n' >> "$FAKE_ACTIVE_PACKAGES"
+        fi
+        printf 'Success\n' ;;
+    'shell ime enable org.liskovsoft.androidtv.rukeyboard/com.liskovsoft.leankeyboard.ime.LeanbackImeService')
+        [ "$(cat "$FAKE_IME_LIST_CALLS")" -ge "${FAKE_IME_DISCOVERY_DELAY:-0}" ] || {
+            printf 'Unknown id: org.liskovsoft.androidtv.rukeyboard/com.liskovsoft.leankeyboard.ime.LeanbackImeService\n' >&2
+            exit 1
+        }
+        printf 'Input method org.liskovsoft.androidtv.rukeyboard/com.liskovsoft.leankeyboard.ime.LeanbackImeService: now enabled for user #0\n' ;;
+    'shell ime set org.liskovsoft.androidtv.rukeyboard/com.liskovsoft.leankeyboard.ime.LeanbackImeService')
+        if [ "${FAKE_IME_SET_EFFECT:-1}" = 1 ]; then
+            printf 'org.liskovsoft.androidtv.rukeyboard/com.liskovsoft.leankeyboard.ime.LeanbackImeService\n' > "$FAKE_DEFAULT_IME_STATE"
+        fi
+        printf 'Input method org.liskovsoft.androidtv.rukeyboard/com.liskovsoft.leankeyboard.ime.LeanbackImeService selected for user #0\n' ;;
+    'shell ime enable com.amazon.tv.ime/.FireTVIME')
+        printf 'Input method com.amazon.tv.ime/.FireTVIME: now enabled for user #0\n' ;;
+    'shell ime set com.amazon.tv.ime/.FireTVIME')
+        printf 'com.amazon.tv.ime/.FireTVIME\n' > "$FAKE_DEFAULT_IME_STATE"
+        printf 'Input method com.amazon.tv.ime/.FireTVIME selected for user #0\n' ;;
+    'uninstall org.liskovsoft.androidtv.rukeyboard')
+        grep -Fvx 'package:org.liskovsoft.androidtv.rukeyboard' "$FAKE_ACTIVE_PACKAGES" > "$FAKE_ACTIVE_PACKAGES.next" || true
+        mv "$FAKE_ACTIVE_PACKAGES.next" "$FAKE_ACTIVE_PACKAGES"
         printf 'Success\n' ;;
     install\ -r\ *kara-settings-v6-signed.apk)
         printf 'package:local.kara.settingsredirector\n' >> "$FAKE_ACTIVE_PACKAGES"
@@ -485,6 +540,8 @@ run_tool() {
     FAKE_PROJECTIVY_APK="$fixture/projectivy.apk" \
     FAKE_AURORA_RELEASE_JSON="$fixture/aurora-release.json" \
     FAKE_AURORA_APK="$fixture/aurora.apk" \
+    FAKE_KEYBOARD_RELEASE_JSON="$fixture/keyboard-release.json" \
+    FAKE_KEYBOARD_APK="$fixture/leankey.apk" \
     FAKE_EXPLOIT_RELEASE_JSON="$fixture/exploit-release.json" \
     FAKE_EXPLOIT_BINARY="$fixture/kara-exploit.arm" \
     FAKE_EXPERIMENTAL_RELEASE_JSON="$fixture/experimental-release.json" \
@@ -496,6 +553,8 @@ run_tool() {
     FAKE_OTA_STATE="$fixture/ota.state" \
     FAKE_CEC_STATE="$fixture/cec.state" \
     FAKE_ADB_ENABLED_STATE="$fixture/adb-enabled.state" \
+    FAKE_DEFAULT_IME_STATE="$fixture/default-ime.state" \
+    FAKE_IME_LIST_CALLS="$fixture/ime-list.calls" \
     FAKE_ROOT_STATE="$fixture/root.state" \
     FAKE_PROFILE_OWNER_STATE_FILE="$fixture/profile-owner.state" \
     FAKE_AMAZON_LAUNCHER_STATE="$fixture/amazon-launcher.state" \
@@ -508,7 +567,9 @@ run_tool() {
     KARA_PRIVILEGED_MANIFEST="$fixture/remove-privileged.txt" \
     KARA_EXPLOIT_EXPECTED_SHA256="$fixture_exploit_digest" \
     KARA_EXPERIMENTAL_EXPECTED_SHA256="$fixture_experimental_digest" \
+    LEANKEY_EXPECTED_SHA256="$fixture_keyboard_digest" \
     KARA_ROOT_WAIT_ATTEMPTS=1 \
+    KARA_IME_WAIT_ATTEMPTS=3 KARA_IME_WAIT_DELAY=0 \
     KARA_CACHE_DIR="$fixture/cache" KARA_BACKUP_DIR="$fixture/backups" \
     "$tool" "$@"
 }
@@ -758,6 +819,65 @@ test_downloads_and_verifies_official_aurora() {
     rm -rf "$fixture"
 }
 
+test_downloads_and_verifies_pinned_leankey_keyboard() {
+    new_fixture
+    if output=$(run_tool download-keyboard 2>&1) &&
+        [ -f "$fixture/cache/LeanKeyboard_v6.1.31_playstore_r.apk" ] &&
+        printf '%s\n' "$output" | grep -F 'LEANKEY_VERSION=6.1.31' >/dev/null &&
+        printf '%s\n' "$output" | grep -F "LEANKEY_SHA256=$fixture_keyboard_digest" >/dev/null
+    then
+        ok 'downloads and verifies the pinned official LeanKey Keyboard'
+    else
+        not_ok 'downloads and verifies the pinned official LeanKey Keyboard'; printf '%s\n' "$output"
+    fi
+    rm -rf "$fixture"
+}
+
+test_install_keyboard_selects_leankey_and_preserves_firetvime() {
+    new_fixture
+    if output=$(run_tool --yes install-keyboard 2>&1) &&
+        printf '%s\n' "$output" | grep -F 'KEYBOARD_GATE=PASS previous=com.amazon.tv.ime/.FireTVIME current=org.liskovsoft.androidtv.rukeyboard/com.liskovsoft.leankeyboard.ime.LeanbackImeService' >/dev/null &&
+        [ "$(cat "$fixture/default-ime.state")" = org.liskovsoft.androidtv.rukeyboard/com.liskovsoft.leankeyboard.ime.LeanbackImeService ] &&
+        grep -Fx 'package:org.liskovsoft.androidtv.rukeyboard' "$fixture/active.packages" >/dev/null &&
+        grep -Fx 'shell ime enable org.liskovsoft.androidtv.rukeyboard/com.liskovsoft.leankeyboard.ime.LeanbackImeService' "$fixture/adb.log" >/dev/null
+    then
+        ok 'installs LeanKey while preserving FireTVIME for rollback'
+    else
+        not_ok 'installs LeanKey while preserving FireTVIME for rollback'; printf '%s\n' "$output"; cat "$fixture/adb.log"
+    fi
+    rm -rf "$fixture"
+}
+
+test_install_keyboard_waits_for_fire_os_ime_discovery() {
+    new_fixture
+    if FAKE_IME_DISCOVERY_DELAY=2 run_tool --yes install-keyboard >"$fixture/out" 2>&1 &&
+        [ "$(cat "$fixture/ime-list.calls")" -ge 2 ] &&
+        [ "$(cat "$fixture/default-ime.state")" = org.liskovsoft.androidtv.rukeyboard/com.liskovsoft.leankeyboard.ime.LeanbackImeService ]
+    then
+        ok 'waits for Fire OS to register the newly installed input method'
+    else
+        not_ok 'waits for Fire OS to register the newly installed input method'; cat "$fixture/out"; cat "$fixture/adb.log"
+    fi
+    rm -rf "$fixture"
+}
+
+test_install_keyboard_rolls_back_when_default_does_not_change() {
+    new_fixture
+    if FAKE_IME_SET_EFFECT=0 run_tool --yes install-keyboard >"$fixture/out" 2>&1; then
+        not_ok 'rolls back a failed LeanKey activation'
+    elif grep -F 'LeanKey did not become the default input method' "$fixture/out" >/dev/null &&
+        [ "$(cat "$fixture/default-ime.state")" = com.amazon.tv.ime/.FireTVIME ] &&
+        ! grep -Fx 'package:org.liskovsoft.androidtv.rukeyboard' "$fixture/active.packages" >/dev/null &&
+        grep -Fx 'shell ime set com.amazon.tv.ime/.FireTVIME' "$fixture/adb.log" >/dev/null &&
+        grep -Fx 'uninstall org.liskovsoft.androidtv.rukeyboard' "$fixture/adb.log" >/dev/null
+    then
+        ok 'rolls back the previous IME and package after activation failure'
+    else
+        not_ok 'rolls back the previous IME and package after activation failure'; cat "$fixture/out"; cat "$fixture/adb.log"
+    fi
+    rm -rf "$fixture"
+}
+
 test_uses_explicit_root_helper_for_protected_package() {
     new_fixture
     printf 'package:com.amazon.testprivileged\n' >> "$fixture/active.packages"
@@ -965,10 +1085,11 @@ test_root_failure_aborts_before_package_mutation_and_rolls_back_cec() {
 test_ssh_bridge_stages_every_local_payload() {
     new_fixture
     if run_tool --bridge root@test --serial USB123 --yes apply >"$fixture/out" 2>&1 &&
-        [ "$(grep -c '^scp ' "$fixture/bridge.log")" -eq 4 ] &&
+        [ "$(grep -c '^scp ' "$fixture/bridge.log")" -eq 5 ] &&
         grep -E "^-s USB123 push /tmp/kara-tool-[0-9]+-kara-ghostlock-PS7713-5443.arm /data/local/tmp/kara-ghostlock-[0-9]+" "$fixture/adb.log" >/dev/null &&
-        [ "$(grep -c "^-s USB123 install -r /tmp/kara-tool-" "$fixture/adb.log")" -eq 3 ] &&
-        [ "$(grep -c "ssh root@test rm -f /tmp/kara-tool-" "$fixture/bridge.log")" -eq 4 ]
+        grep -E "^-s USB123 install -r /tmp/kara-tool-[0-9]+-LeanKeyboard_v6[.]1[.]31_playstore_r[.]apk" "$fixture/adb.log" >/dev/null &&
+        [ "$(grep -c "^-s USB123 install -r /tmp/kara-tool-" "$fixture/adb.log")" -eq 4 ] &&
+        [ "$(grep -c "ssh root@test rm -f /tmp/kara-tool-" "$fixture/bridge.log")" -eq 5 ]
     then
         ok 'SSH bridge stages and cleans every local payload'
     else
@@ -1369,6 +1490,42 @@ test_installs_aurora_before_home_switch() {
     rm -rf "$fixture"
 }
 
+test_apply_activates_leankey_before_home_switch() {
+    new_fixture
+    if run_tool --yes apply >"$fixture/out" 2>&1; then
+        keyboard_line=$(grep -nFx 'shell ime set org.liskovsoft.androidtv.rukeyboard/com.liskovsoft.leankeyboard.ime.LeanbackImeService' "$fixture/adb.log" | head -n 1 | cut -d: -f1)
+        home_line=$(grep -n 'set-home-activity --user 0 com.spocky.projengmenu' "$fixture/adb.log" | head -n 1 | cut -d: -f1)
+        if [ -n "$keyboard_line" ] && [ "$keyboard_line" -lt "$home_line" ] &&
+            [ "$(cat "$fixture/default-ime.state")" = org.liskovsoft.androidtv.rukeyboard/com.liskovsoft.leankeyboard.ime.LeanbackImeService ]
+        then
+            ok 'activates LeanKey before switching HOME'
+        else
+            not_ok 'activates LeanKey before switching HOME'; cat "$fixture/adb.log"
+        fi
+    else
+        not_ok 'activates LeanKey before switching HOME'; cat "$fixture/out"
+    fi
+    rm -rf "$fixture"
+}
+
+test_apply_failure_restores_previous_ime_and_uninstalls_new_keyboard() {
+    new_fixture
+    if FAKE_SET_HOME_EFFECT=0 run_tool --yes apply >"$fixture/out" 2>&1; then
+        not_ok 'restores the prior IME after a later apply failure'
+    elif grep -F 'AUTOMATIC_ROLLBACK=PASS' "$fixture/out" >/dev/null &&
+        [ "$(cat "$fixture/default-ime.state")" = com.amazon.tv.ime/.FireTVIME ] &&
+        ! grep -Fx 'package:org.liskovsoft.androidtv.rukeyboard' "$fixture/active.packages" >/dev/null &&
+        grep -Fx 'shell ime set org.liskovsoft.androidtv.rukeyboard/com.liskovsoft.leankeyboard.ime.LeanbackImeService' "$fixture/adb.log" >/dev/null &&
+        grep -Fx 'shell ime set com.amazon.tv.ime/.FireTVIME' "$fixture/adb.log" >/dev/null &&
+        grep -Fx 'uninstall org.liskovsoft.androidtv.rukeyboard' "$fixture/adb.log" >/dev/null
+    then
+        ok 'restores the prior IME and removes newly installed LeanKey after apply failure'
+    else
+        not_ok 'restores the prior IME and removes newly installed LeanKey after apply failure'; cat "$fixture/out"; cat "$fixture/adb.log"
+    fi
+    rm -rf "$fixture"
+}
+
 test_fails_when_aurora_install_has_no_package_effect() {
     new_fixture
     if FAKE_INSTALL_AURORA_EFFECT=0 run_tool --yes apply >"$fixture/out" 2>&1; then
@@ -1524,6 +1681,10 @@ fi
 
 test_downloads_and_verifies_official_projectivy
 test_downloads_and_verifies_official_aurora
+test_downloads_and_verifies_pinned_leankey_keyboard
+test_install_keyboard_selects_leankey_and_preserves_firetvime
+test_install_keyboard_waits_for_fire_os_ime_discovery
+test_install_keyboard_rolls_back_when_default_does_not_change
 test_expands_home_relative_build_tool_paths
 test_apply_preflights_build_tools_before_device_or_root
 test_downloads_and_verifies_kara_exploit
@@ -1562,6 +1723,8 @@ test_restore_accepts_launcher_as_firehomestarter_home_equivalent
 test_restore_rejects_launcher_equivalence_when_launcher_was_not_backed_up
 test_installs_kara_settings_before_home_switch
 test_installs_aurora_before_home_switch
+test_apply_activates_leankey_before_home_switch
+test_apply_failure_restores_previous_ime_and_uninstalls_new_keyboard
 test_fails_when_aurora_install_has_no_package_effect
 test_fails_when_requested_package_remains_active
 test_root_retries_reviewed_package_left_active_by_shell

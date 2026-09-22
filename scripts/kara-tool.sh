@@ -16,6 +16,13 @@ PARENTAL_APP_CONTEXT=u:r:amazon_app:s0
 PROJECTIVY_CERT_SHA256=f6697bf4082ee97511e4de07863193884a015b7ab5860430321bda1042b0aadd
 AURORA_PACKAGE=com.aurora.store
 AURORA_CERT_SHA256=4c626157ad02bda3401a7263555f68a79663fc3e13a4d4369a12570941aa280f
+LEANKEY_REPO=yuliskov/LeanKeyboard
+LEANKEY_TAG=6.1.31
+LEANKEY_ASSET=LeanKeyboard_v6.1.31_playstore_r.apk
+LEANKEY_PACKAGE=org.liskovsoft.androidtv.rukeyboard
+LEANKEY_IME=org.liskovsoft.androidtv.rukeyboard/com.liskovsoft.leankeyboard.ime.LeanbackImeService
+LEANKEY_CERT_SHA256=955ef7b51f8fb9e4036678471a9edea0bbb3bb9b02753f796d9d6bf19dc2002d
+LEANKEY_EXPECTED_SHA256=${LEANKEY_EXPECTED_SHA256:-5a90529fcae55c664128fb36e752f90e84d158266eced85084594c1d336a1468}
 KARA_SETTINGS_SHA256=7b349318e531300f2c6a0e5541918d932fdd36ab62f5e633e2e284592c17aee0
 SUPPORTED_DEVICE=kara
 SUPPORTED_MODEL=AFTKA
@@ -35,6 +42,8 @@ KARA_EXPERIMENTAL_ASSET=kara-ghostlock-experimental-newer.arm
 KARA_EXPERIMENTAL_EXPECTED_SHA256=${KARA_EXPERIMENTAL_EXPECTED_SHA256:-d0978d3fcc938150cdc8992243b7a70eedc285ac833ff7a20e99e7b49610a8be}
 KARA_EXPERIMENTAL_CONFIRMATION=RUN-KARA-EXPERIMENTAL-NEWER-I-ACCEPT-WATCHDOG-REBOOT
 KARA_ROOT_WAIT_ATTEMPTS=${KARA_ROOT_WAIT_ATTEMPTS:-20}
+KARA_IME_WAIT_ATTEMPTS=${KARA_IME_WAIT_ATTEMPTS:-10}
+KARA_IME_WAIT_DELAY=${KARA_IME_WAIT_DELAY:-1}
 PARENTAL_UID_EXEC_SHA256=e6dd64b64473ac825eace02f0b588aeb377ff815ad067a4d4ce9620f1961cf2b
 PARENTAL_CLEAR_DEX_SHA256=9974b0f45ed1bac1ff4d607246bf09da2550607ee7c95327393002432dc1c2c8
 
@@ -146,7 +155,7 @@ cleanup() {
     fi
     if [ -n "$temp_dir" ] && [ -d "$temp_dir" ]; then
         rm -f "$temp_dir/release.json" "$temp_dir/release.fields" \
-            "$temp_dir/projectivy.apk.part" "$temp_dir/aurora.apk.part" \
+            "$temp_dir/projectivy.apk.part" "$temp_dir/aurora.apk.part" "$temp_dir/leankey.apk.part" \
             "$temp_dir/$KARA_EXPLOIT_ASSET.part" "$temp_dir/$KARA_EXPERIMENTAL_ASSET.part"
         rmdir "$temp_dir" 2>/dev/null || true
     fi
@@ -165,11 +174,13 @@ Commands:
   audit                  Read-only device and package inventory
   download-projectivy    Download and authenticate official Projectivy APK
   download-aurora        Download and authenticate official Aurora Store APK
+  download-keyboard      Download and authenticate pinned official LeanKey APK
   download-exploit       Download and authenticate the exact kara exploit
   download-experimental  Download the separate unvalidated newer-build exploit
   probe-newer            Run only the safe compatibility probe on a newer build
   test-newer             Make one experimental temporary-root attempt
   backup                 Save user-0 package, HOME, OTA, and identity state
+  install-keyboard       Install and select LeanKey without changing HOME or debloat
   apply                  Backup, install Projectivy, set HOME, and debloat
   verify                 Verify the supported durable configuration
   restore                Restore state from --backup DIRECTORY
@@ -214,6 +225,9 @@ if [ -n "$bridge" ]; then
 fi
 case "$KARA_ROOT_WAIT_ATTEMPTS" in ''|*[!0-9]*) fail 'invalid root wait attempt count' ;; esac
 [ "$KARA_ROOT_WAIT_ATTEMPTS" -gt 0 ] || fail 'root wait attempt count must be positive'
+case "$KARA_IME_WAIT_ATTEMPTS" in ''|*[!0-9]*) fail 'invalid IME wait attempt count' ;; esac
+[ "$KARA_IME_WAIT_ATTEMPTS" -gt 0 ] || fail 'IME wait attempt count must be positive'
+case "$KARA_IME_WAIT_DELAY" in ''|*[!0-9]*) fail 'invalid IME wait delay' ;; esac
 
 remote_adb() {
     remote_line=
@@ -540,6 +554,57 @@ PY
     printf 'AURORA_SHA256=%s\n' "$actual_digest"
 }
 
+download_keyboard() {
+    need "$CURL"
+    need python3
+    need "$AAPT"
+    need "$APKSIGNER"
+    mkdir -p "$cache_dir"
+    temp_dir=$(mktemp -d "${TMPDIR:-/tmp}/kara-leankey.XXXXXX")
+    api_url="https://api.github.com/repos/$LEANKEY_REPO/releases/tags/$LEANKEY_TAG"
+    "$CURL" -fsSL --proto '=https' --tlsv1.2 "$api_url" -o "$temp_dir/release.json"
+    python3 - "$temp_dir/release.json" "$LEANKEY_TAG" "$LEANKEY_ASSET" > "$temp_dir/release.fields" <<'PY'
+import json, sys
+
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+expected_tag, expected_name = sys.argv[2:4]
+if data.get("tag_name") != expected_tag:
+    raise SystemExit("unexpected LeanKey release tag")
+assets = [asset for asset in data.get("assets", [])
+          if asset.get("name") == expected_name]
+if len(assets) != 1:
+    raise SystemExit("missing or ambiguous LeanKey APK")
+asset = assets[0]
+if not isinstance(asset.get("size"), int) or asset["size"] <= 0:
+    raise SystemExit("invalid LeanKey asset size")
+print(asset.get("browser_download_url", ""))
+PY
+    asset_url=$(sed -n '1p' "$temp_dir/release.fields")
+    expected_url="https://github.com/$LEANKEY_REPO/releases/download/$LEANKEY_TAG/$LEANKEY_ASSET"
+    [ "$asset_url" = "$expected_url" ] || fail 'untrusted LeanKey asset URL'
+    "$CURL" -fsSL --proto '=https' --tlsv1.2 "$asset_url" -o "$temp_dir/leankey.apk.part"
+    actual_digest=$(sha256_file "$temp_dir/leankey.apk.part")
+    [ "$actual_digest" = "$LEANKEY_EXPECTED_SHA256" ] || fail 'LeanKey SHA-256 mismatch'
+
+    badging=$("$AAPT" dump badging "$temp_dir/leankey.apk.part") || fail 'aapt rejected LeanKey APK'
+    package_name=$(printf '%s\n' "$badging" | sed -n "s/^package: name='\([^']*\)'.*/\1/p" | head -n 1)
+    version_name=$(printf '%s\n' "$badging" | sed -n "s/^package:.* versionName='\([^']*\)'.*/\1/p" | head -n 1)
+    min_sdk=$(printf '%s\n' "$badging" | sed -n "s/^sdkVersion:'\([^']*\)'.*/\1/p" | head -n 1)
+    [ "$package_name" = "$LEANKEY_PACKAGE" ] || fail 'LeanKey package name mismatch'
+    [ "$version_name" = "$LEANKEY_TAG" ] || fail 'LeanKey tag/version mismatch'
+    case "$min_sdk" in ''|*[!0-9]*) fail 'LeanKey minimum SDK is invalid' ;; esac
+    [ "$min_sdk" -le "$SUPPORTED_API" ] || fail 'LeanKey is incompatible with Android 9'
+
+    certs=$("$APKSIGNER" verify --print-certs "$temp_dir/leankey.apk.part") || fail 'LeanKey APK signature verification failed'
+    cert_digest=$(apk_certificate_sha256 "$certs") || fail 'LeanKey signing certificate digest is missing or ambiguous'
+    [ "$cert_digest" = "$LEANKEY_CERT_SHA256" ] || fail "LeanKey signing certificate mismatch: $cert_digest"
+    final_apk="$cache_dir/$LEANKEY_ASSET"
+    mv "$temp_dir/leankey.apk.part" "$final_apk"
+    printf 'LEANKEY_VERSION=%s\n' "$LEANKEY_TAG"
+    printf 'LEANKEY_APK=%s\n' "$final_apk"
+    printf 'LEANKEY_SHA256=%s\n' "$actual_digest"
+}
+
 create_backup_values() {
     mkdir -p "$backup_root"
     stamp=$(date -u +%Y%m%dT%H%M%SZ)
@@ -548,6 +613,7 @@ create_backup_values() {
     current_home=$(device cmd package resolve-activity --brief --components --user 0 -a android.intent.action.MAIN -c android.intent.category.HOME)
     ota_value=$(device settings get global ota_disable_automatic_update)
     cec_value=$(device settings get secure block_cec_standby)
+    default_ime=$(device settings get secure default_input_method)
     boot_id=$(device cat /proc/sys/kernel/random/boot_id)
     fingerprint=$(device getprop ro.build.fingerprint)
     amazon_home_component=$(device cmd package resolve-activity --brief --components --user 0 -n "$AMAZON_HOME_COMPONENT" || true)
@@ -564,6 +630,7 @@ create_backup_values() {
         printf 'HOME=%s\n' "$current_home"
         printf 'OTA_DISABLE_AUTOMATIC_UPDATE=%s\n' "$ota_value"
         printf 'BLOCK_CEC_STANDBY=%s\n' "$cec_value"
+        printf 'DEFAULT_INPUT_METHOD=%s\n' "$default_ime"
         printf 'BOOT_ID=%s\n' "$boot_id"
         printf 'FINGERPRINT=%s\n' "$fingerprint"
         printf 'AMAZON_HOME_COMPONENT_ENABLED=%s\n' "$amazon_home_component_enabled"
@@ -613,6 +680,89 @@ install_aurora() {
     [ -f "$aurora_apk" ] || fail 'verified Aurora Store APK is missing'
     install_result=$(adb_install_file "$aurora_apk" | tr -d '\r') || fail 'Aurora Store installation failed'
     printf '%s\n' "$install_result" | tail -n 1 | grep -Fx Success >/dev/null || fail 'Aurora Store installation did not report Success'
+}
+
+valid_ime_component() {
+    case "$1" in ''|null|*[!A-Za-z0-9._/\$-]*) return 1 ;; esac
+    case "$1" in */*) return 0 ;; *) return 1 ;; esac
+}
+
+rollback_keyboard_install() {
+    if valid_ime_component "$keyboard_previous_ime"; then
+        adb_call shell ime enable "$keyboard_previous_ime" >/dev/null 2>&1 || true
+        adb_call shell ime set "$keyboard_previous_ime" >/dev/null 2>&1 || true
+    fi
+    if [ "$keyboard_was_installed" -eq 0 ]; then
+        adb_call uninstall "$LEANKEY_PACKAGE" >/dev/null 2>&1 || true
+    fi
+}
+
+wait_for_keyboard_registration() {
+    ime_attempt=1
+    while [ "$ime_attempt" -le "$KARA_IME_WAIT_ATTEMPTS" ]; do
+        registered_imes=$(device ime list -a -s)
+        if printf '%s\n' "$registered_imes" | grep -Fx "$LEANKEY_IME" >/dev/null; then
+            return 0
+        fi
+        if [ "$ime_attempt" -lt "$KARA_IME_WAIT_ATTEMPTS" ] && [ "$KARA_IME_WAIT_DELAY" -gt 0 ]; then
+            sleep "$KARA_IME_WAIT_DELAY"
+        fi
+        ime_attempt=$((ime_attempt + 1))
+    done
+    return 1
+}
+
+install_keyboard() {
+    keyboard_previous_ime=$(device settings get secure default_input_method)
+    valid_ime_component "$keyboard_previous_ime" || fail "unsafe current input method: $keyboard_previous_ime"
+    keyboard_was_installed=0
+    active_before=$(device pm list packages --user 0)
+    if printf '%s\n' "$active_before" | grep -Fx "package:$LEANKEY_PACKAGE" >/dev/null; then
+        keyboard_was_installed=1
+    fi
+
+    download_output=$(download_keyboard)
+    printf '%s\n' "$download_output"
+    keyboard_apk=$(printf '%s\n' "$download_output" | sed -n 's/^LEANKEY_APK=//p')
+    [ -f "$keyboard_apk" ] || fail 'verified LeanKey APK is missing'
+    install_result=$(adb_install_file "$keyboard_apk" | tr -d '\r') || {
+        rollback_keyboard_install
+        fail 'LeanKey installation failed'
+    }
+    if ! printf '%s\n' "$install_result" | tail -n 1 | grep -Fx Success >/dev/null; then
+        rollback_keyboard_install
+        fail 'LeanKey installation did not report Success'
+    fi
+    active_after=$(device pm list packages --user 0)
+    if ! printf '%s\n' "$active_after" | grep -Fx "package:$LEANKEY_PACKAGE" >/dev/null; then
+        rollback_keyboard_install
+        fail 'LeanKey package is not active after installation'
+    fi
+    if ! wait_for_keyboard_registration; then
+        rollback_keyboard_install
+        fail 'Fire OS did not register the LeanKey input method after installation'
+    fi
+    if ! adb_call shell ime enable "$LEANKEY_IME" >/dev/null; then
+        rollback_keyboard_install
+        fail 'could not enable LeanKey input method'
+    fi
+    if ! adb_call shell ime set "$LEANKEY_IME" >/dev/null; then
+        rollback_keyboard_install
+        fail 'could not select LeanKey input method'
+    fi
+    selected_ime=$(device settings get secure default_input_method)
+    if [ "$selected_ime" != "$LEANKEY_IME" ]; then
+        rollback_keyboard_install
+        fail "LeanKey did not become the default input method: $selected_ime"
+    fi
+    printf 'KEYBOARD_GATE=PASS previous=%s current=%s\n' "$keyboard_previous_ime" "$selected_ime"
+}
+
+install_keyboard_action() {
+    [ "$assume_yes" -eq 1 ] || fail 'install-keyboard requires --yes'
+    controller_prerequisite_gate
+    mutation_identity_gate
+    install_keyboard
 }
 
 stock_settings_packages() {
@@ -1112,6 +1262,7 @@ apply_changes() {
     rollback_cec_only=0
     install_projectivy
     install_aurora
+    install_keyboard
     install_kara_settings
     restore_stock_settings_bridge
     activate_projectivy_home
@@ -1134,6 +1285,7 @@ audit_device() {
     printf 'FLASH_LOCKED=%s\n' "$(device getprop ro.boot.flash.locked)"
     printf 'HOME=%s\n' "$(device cmd package resolve-activity --brief --components --user 0 -a android.intent.action.MAIN -c android.intent.category.HOME)"
     printf 'ADB_ENABLED=%s\n' "$(device settings get global adb_enabled)"
+    printf 'DEFAULT_INPUT_METHOD=%s\n' "$(device settings get secure default_input_method)"
     if [ "$actual_device/$actual_model/$actual_build/API$actual_api" = "$SUPPORTED_DEVICE/$SUPPORTED_MODEL/$SUPPORTED_BUILD/API$SUPPORTED_API" ]; then
         printf 'SUPPORTED_MUTATION_TARGET=YES\n'
     else
@@ -1156,10 +1308,12 @@ verify_device() {
     adb_enabled=$(device settings get global adb_enabled)
     [ "$adb_enabled" = 1 ] || fail 'ADB debugging is not enabled after apply'
     active=$(device pm list packages --user 0)
-    for required_package in "$PROJECTIVY_PACKAGE" "$AURORA_PACKAGE" local.kara.settingsredirector; do
+    for required_package in "$PROJECTIVY_PACKAGE" "$AURORA_PACKAGE" "$LEANKEY_PACKAGE" local.kara.settingsredirector; do
         printf '%s\n' "$active" | grep -Fx "package:$required_package" >/dev/null ||
             fail "required package is not active: $required_package"
     done
+    selected_ime=$(device settings get secure default_input_method)
+    [ "$selected_ime" = "$LEANKEY_IME" ] || fail "LeanKey is not the default input method: $selected_ime"
     verify_stock_settings_bridge
     while IFS= read -r package_name; do
         [ -n "$package_name" ] || continue
@@ -1287,6 +1441,20 @@ restore_backup() {
             adb_call shell cmd package set-home-activity "$old_home" >/dev/null
         fi
     fi
+    old_ime=$(sed -n 's/^DEFAULT_INPUT_METHOD=//p' "$state")
+    if [ -n "$old_ime" ]; then
+        valid_ime_component "$old_ime" || fail "unsafe input method in backup: $old_ime"
+        adb_call shell ime enable "$old_ime" >/dev/null ||
+            fail 'could not enable the previous input method'
+        adb_call shell ime set "$old_ime" >/dev/null ||
+            fail 'could not restore the previous input method'
+        restored_ime=$(device settings get secure default_input_method)
+        [ "$restored_ime" = "$old_ime" ] || fail "previous input method was not restored: $restored_ime"
+        if ! grep -Fx "package:$LEANKEY_PACKAGE" "$packages" >/dev/null; then
+            adb_call uninstall "$LEANKEY_PACKAGE" >/dev/null ||
+                fail 'could not remove LeanKey absent from the backup'
+        fi
+    fi
     old_ota=$(sed -n 's/^OTA_DISABLE_AUTOMATIC_UPDATE=//p' "$state")
     case "$old_ota" in null|'') adb_call shell settings delete global ota_disable_automatic_update >/dev/null ;;
         *) adb_call shell settings put global ota_disable_automatic_update "$old_ota" >/dev/null ;;
@@ -1332,11 +1500,13 @@ case "$command_name" in
     audit) audit_device ;;
     download-projectivy) download_projectivy ;;
     download-aurora) download_aurora ;;
+    download-keyboard) download_keyboard ;;
     download-exploit) download_exploit ;;
     download-experimental) download_experimental ;;
     probe-newer) probe_newer ;;
     test-newer) test_newer ;;
     backup) create_backup ;;
+    install-keyboard) install_keyboard_action ;;
     apply) apply_changes ;;
     verify) verify_device ;;
     restore) restore_backup ;;
