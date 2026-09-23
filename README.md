@@ -16,7 +16,7 @@ persistent root.
 > through authorized ADB and the published software exploit. Do not open the
 > Stick, bridge test points, or short eMMC pins for this procedure.
 
-## Live device screenshot
+## Live device screenshots
 
 ![Projectivy This device details for the live kara AFTKA target](docs/images/projectivy-kara-this-device-2026-09-11.png)
 
@@ -25,6 +25,18 @@ supported physical `kara/AFTKA` target on 2026-09-11. The exact identity audit,
 authenticated non-live exploit probe, and durable configuration verification
 passed. See [`docs/TEST-EVIDENCE.md`](docs/TEST-EVIDENCE.md) for the precise
 boundary of what was tested and the fingerprint/build-number clarification.
+
+![Projectivy HOME with Aurora Store selected on the local kara AFTKA Stick](docs/images/projectivy-kara-home-2026-09-22.png)
+
+Captured directly from the same USB-connected Stick on 2026-09-22 with
+Projectivy resolved as HOME. This is the owner's customized launcher: other
+visible apps were installed separately and are not included in this toolkit.
+
+![Stock Fire TV Settings menu opened through Kara Settings](docs/images/fire-tv-settings-kara-2026-09-22.png)
+
+The stock Fire TV Settings menu was opened from Kara Settings on the same
+Stick. The screenshot shows the preserved Network, Applications, and Display
+& Sounds entries; it does not imply that every submenu was retested that day.
 
 ## Exact supported device
 

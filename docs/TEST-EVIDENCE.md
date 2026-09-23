@@ -15,7 +15,7 @@ host decision suites compile with warnings treated as errors and pass.
 
 ## Standalone controller
 
-- Offline integration suite: 68 passed, 0 failed.
+- Offline integration suite as of 2026-09-22: 76 passed, 0 failed.
 - Package manifests: 106 ordinary removals, zero generic protected removals,
   59 core
   preserves, and 16 compatibility preserves; disjointness gate passed.
@@ -168,6 +168,33 @@ search field, live suggestions appeared, and navigating with D-pad Right to
 LeanKey's SEARCH action and clicking it dismissed the IME and loaded matching
 Aurora results. Projectivy remained the resolved HOME throughout.
 
-The final offline controller suite reports `74 passed, 0 failed`, including
+The 2026-09-21 offline controller suite reported `74 passed, 0 failed`, including
 APK provenance, delayed Fire OS IME discovery, activation readback, failure
 rollback, full-apply rollback, and SSH-bridge payload staging.
+
+## Live Projectivy HOME screenshot — 2026-09-22
+
+The same USB-connected Stick still reported `kara`, `AFTKA`, incremental build
+`0035334210436`, and
+`com.spocky.projengmenu/.ui.home.MainActivity` as its resolved and resumed HOME.
+An unedited 1920x1080 ADB framebuffer capture with Aurora Store selected is
+published at
+[`docs/images/projectivy-kara-home-2026-09-22.png`](images/projectivy-kara-home-2026-09-22.png).
+Its SHA-256 is
+`28d757a5e8581865c5f9cce5ae93fef92720661101be9846b591fc9038b1f158`.
+Other apps visible on this customized Stick were installed separately; their
+appearance in the screenshot does not mean the toolkit downloads them. This
+capture is not evidence of a fresh end-to-end `apply` or live root attempt.
+
+## Live stock Settings screenshot — 2026-09-22
+
+From Kara Settings, the first row opened the retained stock
+`com.amazon.tv.launcher/.ui.MainSettingsActivity` on the same physical Stick.
+The activity was resumed, and an unedited 1920x1080 ADB framebuffer capture of
+the top-level Settings menu is published at
+[`docs/images/fire-tv-settings-kara-2026-09-22.png`](images/fire-tv-settings-kara-2026-09-22.png).
+Its SHA-256 is
+`c5ecfa0f6d7035c3d47648874b7d7750deced0be4751c267362b154f8b7cdea9`.
+The screenshot shows Network, Applications, Display & Sounds, and other stock
+categories. It proves this menu rendered in this session, not that every
+submenu was retested on 2026-09-22.
