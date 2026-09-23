@@ -13,7 +13,9 @@
 The safe probe validates the exact kernel surface without entering the race.
 Live mode is different: it can watchdog-reboot the Stick. The script launches
 live mode once, waits for a uid-0 proof, and refuses app/package changes without
-that proof. It never retries the race automatically.
+that proof. It never retries the race automatically: the exploit's log is
+device-wide, so it cannot unambiguously attribute a failure from concurrent
+invocations to this process.
 
 If ADB returns after an unexpected reboot, run `audit` again. Do not rerun
 `apply` until the build still matches and you have inspected the prior attempt's

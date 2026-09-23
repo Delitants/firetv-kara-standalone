@@ -341,6 +341,10 @@ case "$*" in
                 printf 'clearProfileOwner: invoking as profile-owner UID\n'
                 printf 'clearProfileOwner: completed\n' ;;
             *'runcon u:r:shell:s0 /system/bin/pm disable --user 0 com.amazon.tv.launcher/.ui.HomeActivity_vNext'*)
+                if [ "${FAKE_HOME_DISABLE_ERROR:-0}" = 1 ]; then
+                    printf 'Security exception: Cannot disable a protected package\n'
+                    exit 0
+                fi
                 printf 'disabled\n' > "$FAKE_AMAZON_LAUNCHER_HOME_STATE"
                 printf 'Package com.amazon.tv.launcher/.ui.HomeActivity_vNext new state: disabled\n' ;;
             *'runcon u:r:shell:s0 /system/bin/pm disable --user 0 com.amazon.tv.launcher'*)
@@ -360,6 +364,10 @@ case "$*" in
                 mv "$FAKE_ACTIVE_PACKAGES.next" "$FAKE_ACTIVE_PACKAGES"
                 printf 'Success\n' ;;
             *'runcon u:r:shell:s0 /system/bin/pm uninstall -k --user 0 com.amazon.firehomestarter'*)
+                if [ "${FAKE_HOME_STARTER_REMOVE_ERROR:-0}" = 1 ]; then
+                    printf 'Failure [DELETE_FAILED_INTERNAL_ERROR]\n'
+                    exit 0
+                fi
                 [ "${FAKE_ROOT_UNINSTALL_FAIL_PACKAGE:-}" != com.amazon.firehomestarter ] || exit 1
                 grep -Fvx 'package:com.amazon.firehomestarter' "$FAKE_ACTIVE_PACKAGES" > "$FAKE_ACTIVE_PACKAGES.next" || true
                 mv "$FAKE_ACTIVE_PACKAGES.next" "$FAKE_ACTIVE_PACKAGES"
@@ -1082,6 +1090,38 @@ test_root_failure_aborts_before_package_mutation_and_rolls_back_cec() {
     rm -rf "$fixture"
 }
 
+test_home_disable_reports_pm_error() {
+    new_fixture
+    if FAKE_HOME_DISABLE_ERROR=1 run_tool --root-helper /data/local/tmp/kara-root-helper --yes apply >"$fixture/out" 2>&1; then
+        not_ok 'HOME blocker failure preserves the package-manager error'
+    elif grep -F 'Security exception: Cannot disable a protected package' "$fixture/out" >/dev/null &&
+        grep -F 'FAIL: Fire OS HOME blocker did not report disabled' "$fixture/out" >/dev/null &&
+        grep -F 'AUTOMATIC_ROLLBACK=PASS' "$fixture/out" >/dev/null
+    then
+        ok 'HOME blocker failure preserves the package-manager error'
+    else
+        not_ok 'HOME blocker failure preserves the package-manager error'
+        cat "$fixture/out"
+    fi
+    rm -rf "$fixture"
+}
+
+test_home_starter_remove_reports_pm_error() {
+    new_fixture
+    if FAKE_HOME_STARTER_REMOVE_ERROR=1 run_tool --root-helper /data/local/tmp/kara-root-helper --yes apply >"$fixture/out" 2>&1; then
+        not_ok 'HOME Starter removal failure preserves the package-manager error'
+    elif grep -F 'Failure [DELETE_FAILED_INTERNAL_ERROR]' "$fixture/out" >/dev/null &&
+        grep -F 'FAIL: Fire OS HOME blocker removal did not report Success' "$fixture/out" >/dev/null &&
+        grep -F 'AUTOMATIC_ROLLBACK=PASS' "$fixture/out" >/dev/null
+    then
+        ok 'HOME Starter removal failure preserves the package-manager error'
+    else
+        not_ok 'HOME Starter removal failure preserves the package-manager error'
+        cat "$fixture/out"
+    fi
+    rm -rf "$fixture"
+}
+
 test_ssh_bridge_stages_every_local_payload() {
     new_fixture
     if run_tool --bridge root@test --serial USB123 --yes apply >"$fixture/out" 2>&1 &&
@@ -1250,6 +1290,7 @@ test_refuses_removal_when_projectivy_does_not_become_home() {
     if FAKE_SET_HOME_EFFECT=0 run_tool --yes apply >"$fixture/out" 2>&1; then
         not_ok 'refuses removal unless Projectivy becomes HOME'
     elif grep -F 'Projectivy did not become HOME' "$fixture/out" >/dev/null &&
+        grep -F 'HOME_COMMAND_OUTPUT=Success' "$fixture/out" >/dev/null &&
         ! grep -F 'pm uninstall' "$fixture/adb.log" >/dev/null
     then ok 'refuses removal unless Projectivy becomes HOME'; else not_ok 'refuses removal unless Projectivy becomes HOME'; cat "$fixture/out"; cat "$fixture/adb.log"; fi
     rm -rf "$fixture"
@@ -1705,6 +1746,8 @@ test_refuses_wrong_kernel_before_exploit_or_mutation
 test_refuses_incompatible_exploit_runtime_before_mutation
 test_stops_if_firmware_changes_during_exploit
 test_root_failure_aborts_before_package_mutation_and_rolls_back_cec
+test_home_disable_reports_pm_error
+test_home_starter_remove_reports_pm_error
 test_ssh_bridge_stages_every_local_payload
 test_accepts_build_tools_37_signer_output
 test_rejects_nonofficial_projectivy_url

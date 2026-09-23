@@ -1203,18 +1203,26 @@ remove_parental_controls_last() {
 
 disable_fire_os_home_blocker() {
     home_blocker=$1
-    disable_output=$(root_command "runcon u:r:shell:s0 /system/bin/pm disable --user 0 $home_blocker") ||
+    disable_output=$(root_command "runcon u:r:shell:s0 /system/bin/pm disable --user 0 $home_blocker" 2>&1) || {
+        printf 'HOME_COMMAND_OUTPUT=%s\n' "$disable_output" >&2
         fail "could not disable Fire OS HOME blocker: $home_blocker"
-    printf '%s\n' "$disable_output" | grep -F "Package $home_blocker new state: disabled" >/dev/null ||
+    }
+    printf '%s\n' "$disable_output" | grep -F "Package $home_blocker new state: disabled" >/dev/null || {
+        printf 'HOME_COMMAND_OUTPUT=%s\n' "$disable_output" >&2
         fail "Fire OS HOME blocker did not report disabled: $home_blocker"
+    }
 }
 
 remove_fire_os_home_blocker() {
     home_blocker=$1
-    remove_output=$(root_command "runcon u:r:shell:s0 /system/bin/pm uninstall -k --user 0 $home_blocker") ||
+    remove_output=$(root_command "runcon u:r:shell:s0 /system/bin/pm uninstall -k --user 0 $home_blocker" 2>&1) || {
+        printf 'HOME_COMMAND_OUTPUT=%s\n' "$remove_output" >&2
         fail "could not remove Fire OS HOME blocker: $home_blocker"
-    printf '%s\n' "$remove_output" | tr -d '\r' | tail -n 1 | grep -Fx Success >/dev/null ||
+    }
+    printf '%s\n' "$remove_output" | tr -d '\r' | tail -n 1 | grep -Fx Success >/dev/null || {
+        printf 'HOME_COMMAND_OUTPUT=%s\n' "$remove_output" >&2
         fail "Fire OS HOME blocker removal did not report Success: $home_blocker"
+    }
 }
 
 activate_projectivy_home() {
@@ -1229,13 +1237,21 @@ activate_projectivy_home() {
     disable_fire_os_home_blocker "$AMAZON_HOME_COMPONENT"
     disable_fire_os_home_blocker "$AMAZON_HOME_STARTER_PACKAGE"
 
-    root_command "runcon u:r:shell:s0 /system/bin/cmd package set-home-activity --user 0 $PROJECTIVY_HOME" >/dev/null ||
+    home_set_output=$(root_command "runcon u:r:shell:s0 /system/bin/cmd package set-home-activity --user 0 $PROJECTIVY_HOME" 2>&1) || {
+        printf 'HOME_COMMAND_OUTPUT=%s\n' "$home_set_output" >&2
         fail 'could not set Projectivy as HOME from the root helper'
+    }
     selected_home=$(device cmd package resolve-activity --brief --components --user 0 -a android.intent.action.MAIN -c android.intent.category.HOME)
-    [ "$selected_home" = "$PROJECTIVY_HOME" ] || fail "Projectivy did not become HOME: $selected_home"
+    [ "$selected_home" = "$PROJECTIVY_HOME" ] || {
+        printf 'HOME_COMMAND_OUTPUT=%s\n' "$home_set_output" >&2
+        fail "Projectivy did not become HOME: $selected_home"
+    }
     adb_call shell am start -W --user 0 -a android.intent.action.MAIN -c android.intent.category.HOME >/dev/null
     selected_home=$(device cmd package resolve-activity --brief --components --user 0 -a android.intent.action.MAIN -c android.intent.category.HOME)
-    [ "$selected_home" = "$PROJECTIVY_HOME" ] || fail "Projectivy did not remain HOME after launch: $selected_home"
+    [ "$selected_home" = "$PROJECTIVY_HOME" ] || {
+        printf 'HOME_COMMAND_OUTPUT=%s\n' "$home_set_output" >&2
+        fail "Projectivy did not remain HOME after launch: $selected_home"
+    }
 
     remove_fire_os_home_blocker "$AMAZON_HOME_STARTER_PACKAGE"
     verify_stock_settings_bridge

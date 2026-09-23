@@ -225,6 +225,8 @@ The order is fail-closed:
    plus Fire Home Starter, set and read back Projectivy as HOME, and remove Fire
    Home Starter. The Amazon launcher package remains installed as a privileged
    bridge to the complete stock Settings menu, but it can no longer become HOME.
+   If a HOME command fails, its package-manager output is printed before
+   rollback so the underlying permission or resolver error is visible.
 9. Remove the remaining reviewed Amazon packages for user 0. Any package that
    an ordinary shell uninstall leaves active is retried through the proven root
    helper, and the full removal manifest is read back.
