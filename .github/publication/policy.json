@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "repository": "Delitants/firetv-kara-standalone",
+  "baseline": "356c840a649017892153d4b5091405eb6b893c44",
+  "public_docs": [],
+  "public_data": [],
+  "release_assets": [
+    "firetv-kara-standalone-*.zip",
+    "firetv-kara-standalone-*.tar.gz",
+    "SHA256SUMS"
+  ]
+}
